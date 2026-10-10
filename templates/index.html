@@ -15,8 +15,8 @@
 <body>
   <main class="wrap">
     <section id="loginPanel" class="card hidden">
-      <h2>Owner login</h2><p class="muted">Your private downloader and library.</p>
-      <form id="loginForm"><label for="ownerPassword">Password</label><input id="ownerPassword" type="password" autocomplete="current-password" required maxlength="256"/><button class="primary">Sign in</button></form>
+      <h2 id="loginTitle">Owner login</h2><p class="muted">Your private downloader and library.</p>
+      <form id="loginForm"><label for="ownerPassword">Password</label><input id="ownerPassword" type="password" autocomplete="current-password" required maxlength="256"/><label id="loginCodeLabel" class="hidden">Authenticator code<input id="ownerCode" inputmode="numeric" autocomplete="one-time-code" maxlength="6" pattern="[0-9]{6}"/></label><button id="loginSubmit" class="primary">Sign in</button></form>
       <p id="loginMessage" role="alert"></p>
     </section>
     <nav id="navigation" aria-label="Main navigation">
@@ -26,7 +26,7 @@
     </nav>
     <section class="hero" data-panel="quick">
       <div class="topline">
-        <div class="privacy-badge"><span class="privacy-dot"></span>Private on your Tailscale network</div>
+        <div class="privacy-badge"><span class="privacy-dot"></span>Owner access required</div>
         <div class="version-badge">Private library</div>
       </div>
 
@@ -157,7 +157,10 @@
       <div class="options"><label>Default destination<select id="preferredDestination"><option value="library">Server library</option><option value="transfer">Quick transfer</option></select></label>
       <label>Default quality ceiling<select id="preferredQuality"><option value="0">Best available</option><option>2160</option><option>1440</option><option>1080</option><option>720</option><option>480</option><option>360</option></select></label></div>
       <button id="savePreferences" class="primary">Save preferences</button>
-      <h3>Account connections</h3><p id="accountState" class="muted"></p>
+      <h3>Two-factor authentication</h3><p id="mfaState" class="muted"></p>
+      <form id="mfaForm"><label>Confirm owner password<input id="mfaPassword" type="password" autocomplete="current-password" maxlength="256" required/></label><button id="mfaStart" type="button" class="secondary">Set up authenticator</button>
+      <div id="mfaEnrollment" class="hidden"><p>Add this secret manually to your authenticator. Keep it private.</p><code id="mfaSecret"></code><label>Six-digit authenticator code<input id="mfaCode" inputmode="numeric" autocomplete="one-time-code" maxlength="6" required pattern="[0-9]{6}"/></label><button class="primary">Enable MFA</button></div></form>
+      <p id="mfaMessage" role="alert"></p><h3>Account connections</h3><p id="accountState" class="muted"></p>
       <p class="save-note">Import an explicitly exported Netscape file containing only youtube.com cookies. The server stores it with private permissions. Your Mac session does not automatically connect a VPS. Never supply your password or a whole browser profile.</p>
       <label>Session file<input id="cookieFile" type="file" accept=".txt"/></label>
       <label><input id="cookieConsent" type="checkbox"/> This is my session, and I have permission to access the media.</label>

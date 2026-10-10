@@ -2,7 +2,7 @@
 
 This is a separate local Git development copy on branch `feature/durable-library`. The live Mac installation, LaunchAgent, original VPS package, ZIP and backup remain intact. No server has been provisioned or deployed.
 
-Read [private deployment instructions](deploy/README-VPS.md). This edition adds durable SQLite jobs, a conservative queue, owner login, a persistent server library, real media validation and richer yt-dlp previews. YouTube account/membership workflows are experimental and have not been verified with a real authorized subscription.
+Read [Caddy HTTPS deployment instructions](deploy/README-HTTPS.md). This edition adds durable SQLite jobs, a conservative queue, owner login, a persistent server library, real media validation and richer yt-dlp previews. YouTube account/membership workflows are experimental and have not been verified with a real authorized subscription.
 
 ## Storage and execution
 
@@ -14,7 +14,7 @@ A configured external volume should mount directly at the library root with `LIB
 
 ## Owner login
 
-Production requires an owner password in the private config volume. Until configured, data endpoints fail closed; only login status and health are accessible. Configure interactively using `python manage.py set-password` inside the container. Passwords are scrypt hashes, and session identifiers are stored as hashes, expire after seven days and are invalidated on password rotation. Secure, HttpOnly, SameSite=Strict cookies and cross-site mutation checks protect browser access. Tailscale remains the network perimeter, while owner login protects media from other reachable peers.
+Production requires an owner password in the private config volume. Until configured, data endpoints fail closed; only login status and health are accessible. Configure interactively using `python manage.py set-password` and `python manage.py enroll-mfa` inside the container through SSH. `set-password` is also server recovery: it resets MFA, which must be enrolled again before exposure. Passwords are scrypt hashes, and session identifiers are stored as hashes, expire after seven days and are invalidated on password rotation or MFA enrollment. Login guesses are throttled in SQLite across restarts. Six-digit TOTP codes cannot be replayed. Secure, HttpOnly, SameSite=Strict cookies and cross-site mutation checks protect browser access. Production requires TOTP MFA and trusted HTTPS from Caddy. The application publishes only to host loopback; ports 80/443 remain closed until the operator approves final exposure. Public deployment does not require Tailscale clients.
 
 For an explicitly isolated LOCAL development server only, set `OVD_ALLOW_UNAUTHENTICATED_LOCAL=1` and bind `127.0.0.1` on a spare port. Only loopback clients qualify. Compose forces this off. To test owner login on local HTTP, use `COOKIE_SECURE=0`; production forces Secure cookies. Do not use real account secrets during fixture testing.
 
@@ -50,8 +50,12 @@ export LIBRARY_DIR="$PWD/.local-runtime/library"
 export STATE_DIR="$PWD/.local-runtime/state"
 export CONFIG_DIR="$PWD/.local-runtime/config"
 export COOKIE_SECURE=0
-.venv/bin/python manage.py set-password
-.venv/bin/uvicorn app:app --host 127.0.0.1 --port 18083 --workers 1 --no-access-log
+export OVD_LOCAL_SETUP=1
+.venv/bin/uvicorn app:app --host 127.0.0.1 --port 8001 --workers 1 --no-access-log
 ```
 
-Open `http://127.0.0.1:18083`, sign in, and stop the preview with Ctrl+C. Nothing here registers a LaunchAgent or restarts port 8000. Do not treat this Mac preview directory as the future remote archive. Do not copy it, `.venv` or secrets into deployment source. For synthetic fixture-only work, the explicit loopback development bypass described above is available; real sessions should use owner login.
+Open `http://127.0.0.1:8001`, create your owner password directly in the browser, optionally enroll MFA in Settings, and stop the preview with Ctrl+C. Nothing here registers a LaunchAgent or restarts port 8000. Do not treat this Mac preview directory as the future remote archive. Do not copy it, `.venv` or secrets into deployment source. For synthetic fixture-only work, the explicit loopback development bypass described above is available; real sessions should use owner login.
+
+## Public source review
+
+Runtime directories, credentials, account sessions, databases, personal media, local backups and private reports are excluded from the public source package and its entire history. Pattern scans and manual fixture review are preparation, not proof that arbitrary future additions are safe. Review the exact commit and file list before the first public push. No repository license has been chosen by the owner yet.

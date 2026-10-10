@@ -4,6 +4,7 @@ let memberManifests = [];
 let playingItem = null;
 let lastPositionWrite = 0;
 let currentView = 'quick';
+let setupMode=false;
 
 window.api = async (path, options = {}) => {
   const res = await fetch(path, {cache:'no-store', ...options, headers:{'Content-Type':'application/json', ...(options.headers || {})}});
@@ -20,6 +21,7 @@ async function perform(id, action) {
   try { await action(); } catch(error) { message(id,error.message); }
 }
 function showLogin(text = '') {
+  $('mfaPassword').value=''; $('mfaCode').value=''; $('mfaSecret').textContent=''; $('mfaEnrollment').classList.add('hidden');
   $('loginPanel').classList.remove('hidden'); $('navigation').hidden = true;
   document.querySelectorAll('[data-panel]').forEach(panel=>panel.classList.add('hidden'));
   message('loginMessage',text);
@@ -38,7 +40,19 @@ window.showView = view => {
 };
 async function boot() {
   const status = await window.api('/api/auth/status');
-  if (!status.authenticated) return showLogin(status.configured?'':'Owner password needs server setup. See the development README.');
+  setupMode=status.setup_available;
+  $('loginTitle').textContent=setupMode?'Create owner account':'Owner login';
+  $('loginSubmit').textContent=setupMode?'Create account':'Sign in';
+  $('ownerPassword').minLength=setupMode?12:1;
+  $('ownerPassword').autocomplete=setupMode?'new-password':'current-password';
+  $('loginCodeLabel').classList.toggle('hidden',!status.mfa_enabled);
+  $('ownerCode').required=status.mfa_enabled;
+  if (!status.authenticated) return showLogin(status.configured?'':setupMode?'Choose a unique password of at least 12 characters.':'Owner password needs server setup. See the deployment README.');
+  if(status.mfa_required && !status.mfa_enabled){
+    $('loginPanel').classList.add('hidden'); $('navigation').hidden=true;
+    document.querySelectorAll('[data-panel]').forEach(panel=>panel.classList.toggle('hidden',panel.dataset.panel!=='settings'));
+    message('mfaState','MFA enrollment is required before access.'); return;
+  }
   $('loginPanel').classList.add('hidden'); $('navigation').hidden=false;
   const preferences=await window.api('/api/settings');
   $('destination').value=preferences.destination || 'library'; $('batchDestination').value=$('destination').value;
@@ -48,7 +62,9 @@ async function boot() {
 }
 $('loginForm').addEventListener('submit',event=>{event.preventDefault();perform('loginMessage',async()=>{
   const password=$('ownerPassword').value; $('ownerPassword').value='';
-  await window.api('/api/auth/login',{method:'POST',body:jsonBody({password})}); await boot();
+  const code=$('ownerCode').value; $('ownerCode').value='';
+  if(setupMode)await window.api('/api/auth/setup',{method:'POST',body:jsonBody({password})});
+  await window.api('/api/auth/login',{method:'POST',body:jsonBody({password,code})}); await boot();
 });});
 document.querySelectorAll('[data-view]').forEach(button=>button.addEventListener('click',()=>window.showView(button.dataset.view)));
 
@@ -130,6 +146,7 @@ $('downloadSelected').addEventListener('click',()=>perform('libraryMessage',asyn
 for(const id of ['librarySearch','librarySort','libraryCollection','libraryWatched']) $(id).addEventListener('change',()=>perform('libraryMessage',refreshLibrary));
 
 async function refreshSettings() {
+  const auth=await window.api('/api/auth/status'); $('mfaState').textContent=auth.mfa_enabled?'Authenticator enabled.':'Authenticator not enabled.'; $('mfaForm').classList.toggle('hidden',auth.mfa_enabled);
   const [storage,account]=await Promise.all([window.api('/api/storage'),window.api('/api/accounts')]);
   message('storageDashboard',`Library ${fmtSize(storage.library_bytes)} / ${fmtSize(storage.library_limit)} · Temporary ${fmtSize(storage.temporary_bytes)} / ${fmtSize(storage.temporary_limit)} · ${fmtSize(storage.free_bytes)} free · Queue ${storage.queue_paused?'paused':'running'}`);
   const value=account.accounts[0]; message('accountState',`YouTube: ${value.status} · ${value.verified_channels?.length || 0} channels verified for membership import${value.expires_at?' · Earliest cookie expiry '+new Date(value.expires_at*1000).toLocaleDateString():''}`);
@@ -179,3 +196,16 @@ $('importMembers').addEventListener('click',()=>perform('membershipMessage',asyn
 }));
 boot().catch(error=>showLogin(error.message));
 setInterval(()=> {if(currentView==='library' && !$('navigation').hidden)perform('libraryMessage',refreshLibrary);},15000);
+
+$('mfaStart').addEventListener('click',()=>perform('mfaMessage',async()=>{
+  const password=$('mfaPassword').value;
+  const data=await window.api('/api/auth/mfa/start',{method:'POST',body:jsonBody({password})});
+  $('mfaSecret').textContent=data.secret; $('mfaEnrollment').classList.remove('hidden');
+  message('mfaMessage','Enter the code from your authenticator to confirm.');
+}));
+$('mfaForm').addEventListener('submit',event=>{event.preventDefault();perform('mfaMessage',async()=>{
+  const password=$('mfaPassword').value, code=$('mfaCode').value;
+  await window.api('/api/auth/mfa/confirm',{method:'POST',body:jsonBody({password,code})});
+  $('mfaPassword').value=''; $('mfaCode').value=''; $('mfaSecret').textContent=''; $('mfaEnrollment').classList.add('hidden');
+  await boot(); message('loginMessage','MFA enabled. Sign in with password and a fresh authenticator code.');
+});});

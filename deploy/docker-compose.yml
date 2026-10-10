@@ -19,6 +19,11 @@ services:
       LIBRARY_REQUIRE_MOUNT: '1'
       COOKIE_SECURE: '1'
       OVD_ALLOW_UNAUTHENTICATED_LOCAL: '0'
+      OVD_LOCAL_SETUP: '0'
+      OVD_REQUIRE_MFA: '1'
+      OVD_REQUIRE_HTTPS: '1'
+      OVD_ALLOWED_HOSTS: ${OVD_ALLOWED_HOSTS:-127.0.0.1,localhost}
+      FORWARDED_ALLOW_IPS: '172.30.80.1'
     volumes:
       - media:/data/downloads
       - library:/data/library
@@ -49,3 +54,7 @@ networks:
     enable_ipv6: false
     driver_opts:
       com.docker.network.bridge.name: ovd0
+    ipam:
+      config:
+        - subnet: 172.30.80.0/24
+          gateway: 172.30.80.1

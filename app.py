@@ -360,7 +360,10 @@ class LeasedFileResponse(FileResponse):
             self.release()
 
 
-app = FastAPI(title=APP_NAME, lifespan=lifespan)
+app = FastAPI(title=APP_NAME, lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
+if os.getenv('OVD_ALLOWED_HOSTS'):
+    from starlette.middleware.trustedhost import TrustedHostMiddleware
+    app.add_middleware(TrustedHostMiddleware,allowed_hosts=os.environ['OVD_ALLOWED_HOSTS'].split(','),www_redirect=False)
 app.add_middleware(security.BodyLimit)
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 
@@ -370,11 +373,16 @@ async def browser_protection(request: Request, call_next):
     # Prevent another website from driving this private service from an authorized browser.
     if request.method not in {"GET", "HEAD", "OPTIONS"}:
         origin = request.headers.get("origin")
-        if request.headers.get("sec-fetch-site") == "cross-site" or (origin and urlparse(origin).netloc != request.headers.get("host")):
+        if request.headers.get("sec-fetch-site") == "cross-site" or (origin and (urlparse(origin).netloc != request.headers.get("host") or urlparse(origin).scheme != request.url.scheme)):
             return JSONResponse({"detail": "Cross-site requests are not allowed."}, status_code=403)
-    if request.url.path.startswith('/api/') and request.url.path not in {'/api/health','/api/auth/status','/api/auth/login'}:
+    if request.url.path.startswith('/api/') and request.url.path not in {'/api/health','/api/auth/status','/api/auth/login','/api/auth/setup'}:
         if not STORE or not (security.local_development(request) or security.authenticated(request,STORE,CONFIG_DIR)):
             return JSONResponse({'detail':'Owner login required.'},status_code=401,headers={'Cache-Control':'no-store'})
+    if request.url.path.startswith('/api/') and request.url.path not in {'/api/health','/api/auth/status','/api/auth/login','/api/auth/setup','/api/auth/logout','/api/auth/mfa/start','/api/auth/mfa/confirm'}:
+        if os.getenv('OVD_REQUIRE_MFA')=='1' and not security.mfa_ready(CONFIG_DIR):
+            return JSONResponse({'detail':'Complete MFA enrollment before using the library.'},status_code=403)
+    if request.url.path.startswith('/api/') and request.url.path!='/api/health' and os.getenv('OVD_REQUIRE_HTTPS')=='1' and request.url.scheme!='https':
+        return JSONResponse({'detail':'HTTPS is required.'},status_code=403)
     response = await call_next(request)
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["Referrer-Policy"] = "no-referrer"
@@ -671,20 +679,63 @@ async def invalid_request(_request, _exception):
 
 class LoginPayload(BaseModel):
     password: str = Field(min_length=1,max_length=256)
+    code: str = Field(default='',max_length=6)
 
 
 @app.get('/api/auth/status')
 async def auth_status(request: Request):
-    return {'configured':bool(security.owner_hash(CONFIG_DIR)),
+    return {'configured':bool(security.owner_hash(CONFIG_DIR)), 'setup_available':security.loopback_setup(request) and not security.owner_hash(CONFIG_DIR), 'mfa_enabled':security.mfa_ready(CONFIG_DIR), 'mfa_required':os.getenv('OVD_REQUIRE_MFA')=='1',
             'authenticated':bool(STORE and (security.local_development(request) or security.authenticated(request,STORE,CONFIG_DIR)))}
 
 
 @app.post('/api/auth/login')
 async def owner_login(payload: LoginPayload):
-    token=await security.login(payload.password,STORE,CONFIG_DIR)
+    token=await security.login(payload.password,STORE,CONFIG_DIR,payload.code)
     response=JSONResponse({'ok':True})
     response.set_cookie('ovd_session',token,max_age=security.SESSION_SECONDS,httponly=True,
         secure=os.getenv('COOKIE_SECURE','1')=='1',samesite='strict',path='/')
+    return response
+
+
+@app.post('/api/auth/setup')
+async def owner_setup(payload: LoginPayload, request: Request):
+    if not security.loopback_setup(request) or security.owner_hash(CONFIG_DIR):
+        raise HTTPException(403,'Owner setup is unavailable.')
+    security.rate_limit(STORE)
+    if len(payload.password)<12:
+        raise HTTPException(400,'Use at least 12 characters.')
+    digest=await asyncio.to_thread(security.password_hash,payload.password)
+    # Recheck after hashing: concurrent bootstrap requests cannot replace the owner.
+    if security.owner_hash(CONFIG_DIR):
+        raise HTTPException(409,'Owner is already configured.')
+    security.write_owner(CONFIG_DIR,{'password_hash':digest})
+    return {'ok':True}
+
+
+@app.post('/api/auth/mfa/start')
+async def mfa_start(payload: LoginPayload):
+    security.rate_limit(STORE)
+    await security.check_password(payload.password,CONFIG_DIR)
+    data=security.owner_config(CONFIG_DIR)
+    if data.get('totp_secret'):
+        raise HTTPException(409,'MFA is already enabled. Recovery uses the private server CLI.')
+    secret=security.base64.b32encode(os.urandom(20)).decode()
+    data['totp_pending']=secret; data['totp_pending_expires']=time.time()+600
+    security.write_owner(CONFIG_DIR,data)
+    return {'secret':secret,'uri':'otpauth://totp/OpenVideoDownloader:Owner?secret='+secret+'&issuer=OpenVideoDownloader&algorithm=SHA1&digits=6&period=30'}
+
+
+@app.post('/api/auth/mfa/confirm')
+async def mfa_confirm(payload: LoginPayload):
+    security.rate_limit(STORE)
+    await security.check_password(payload.password,CONFIG_DIR)
+    data=security.owner_config(CONFIG_DIR)
+    if data.get('totp_secret') or data.get('totp_pending_expires',0)<time.time() or not security.verify_totp(data,payload.code,'totp_pending'):
+        raise HTTPException(400,'Enrollment expired or code incorrect. Start enrollment again.')
+    data['totp_secret']=data.pop('totp_pending'); data.pop('totp_pending_expires',None)
+    security.write_owner(CONFIG_DIR,data)
+    with STORE.db: STORE.db.execute('DELETE FROM sessions')
+    response=JSONResponse({'ok':True}); response.delete_cookie('ovd_session',path='/')
     return response
 
 
