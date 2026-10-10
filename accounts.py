@@ -1,5 +1,6 @@
-"""Explicit YouTube cookie import only; never reads a browser profile or password."""
+"""Explicit YouTube file import or local Chrome connection; never returns session secrets."""
 import os
+import sys
 from pathlib import Path
 import re
 import time
@@ -51,7 +52,10 @@ def import_cookies(text, config, store):
 
 def account_status(store, config):
     record = store.get('account','youtube') or dict(provider='youtube',status='disconnected',verified_channels=[])
-    if not (Path(config)/'youtube.cookies.txt').exists():
+    if record.get('source')=='browser':
+        if sys.platform!='darwin' or os.getenv('OVD_LOCAL_BROWSER')!='1':
+            record.update(status='disconnected',verified_channels=[])
+    elif not (Path(config)/'youtube.cookies.txt').exists():
         record.update(status='disconnected',verified_channels=[])
     elif record.get('expires_at') and record['expires_at'] <= time.time():
         record['status'] = 'expired'
@@ -66,6 +70,8 @@ def cookie_path(url, account, store, config):
     status = account_status(store, config)
     if status['status'] in {'disconnected','expired','needs_attention'}:
         raise HTTPException(409, 'Reconnect this account before using it.')
+    if status.get('source')=='browser':
+        return None
     path = Path(config)/'youtube.cookies.txt'
     if path.is_symlink() or path.stat().st_mode & 0o077:
         raise HTTPException(503, 'Account secret permissions are invalid.')
@@ -78,3 +84,30 @@ def verified_download(info, store):
         channels = set(record.get('verified_channels',[])); channels.add(info['channel_id'])
         record.update(status='verified', verified_channels=sorted(channels), last_verified_at=time.time())
         store.put('account','youtube',record)
+
+
+def worker_credentials(url, account, store, config):
+    path=cookie_path(url,account,store,config)
+    record=account_status(store,config) if account else {}
+    if record.get('source')=='browser':
+        return {'cookiebrowser':'chrome','cookieprofile':record['profile']}
+    return {'cookiefile':path}
+
+
+def connect_chrome(profile, store):
+    if sys.platform!='darwin' or os.getenv('OVD_LOCAL_BROWSER')!='1':
+        raise HTTPException(403,'Browser sessions are supported only in the explicitly enabled local Mac preview.')
+    if not re.fullmatch(r'Default|Profile [0-9]+',profile):
+        raise HTTPException(400,'Choose a Chrome profile from the local profile list.')
+    folder=Path.home()/'Library/Application Support/Google/Chrome'/profile
+    if not folder.is_dir():raise HTTPException(409,'Open Chrome and sign into YouTube first.')
+    record=dict(provider='youtube',source='browser',browser='chrome',profile=profile,status='unverified',verified_channels=[],connected_at=time.time())
+    store.put('account','youtube',record)
+    return record
+
+
+def chrome_profiles():
+    if sys.platform!='darwin' or os.getenv('OVD_LOCAL_BROWSER')!='1':return []
+    directory=Path.home()/'Library/Application Support/Google/Chrome'
+    if not directory.is_dir():return []
+    return sorted(p.name for p in directory.iterdir() if p.is_dir() and re.fullmatch(r'Default|Profile [0-9]+',p.name))

@@ -10,6 +10,7 @@ payload = json.loads(sys.stdin.readline())
 def emit(kind, data):
     print(json.dumps({"type": kind, "data": data}), flush=True)
 if payload['mode'] == 'info':
+    if payload['url'].endswith('/slowinfo'): time.sleep(60)
     emit('result', {'title': 'Fixture', 'suggested_filename': 'Fixture', 'thumbnail': None,
                     'formats': [{'format_id': '18', 'type': 'video + audio'}]})
     sys.exit(0)

@@ -9,7 +9,7 @@ import time
 import yt_dlp
 from yt_dlp.globals import plugin_dirs
 plugin_dirs.value = []
-from yt_dlp.cookies import YoutubeDLCookieJar
+from yt_dlp.cookies import YoutubeDLCookieJar, extract_cookies_from_browser
 from extraction import preview, format_selector, member_entries
 from common import MAX_FILESIZE, MEDIA_EXTENSIONS, _progress_percent, _sanitize_stem, clean_formats, ydl_base_opts
 
@@ -24,9 +24,48 @@ class SecureSessionPolicy(DefaultCookiePolicy):
 
 
 class QuietLogger:
-    def debug(self, _message): pass
-    def warning(self, _message): pass
-    def error(self, _message): pass
+    def debug(self, _message, *args, **kwargs): pass
+    def info(self, _message, *args, **kwargs): pass
+    def warning(self, _message, *args, **kwargs): pass
+    def error(self, _message, *args, **kwargs): pass
+
+
+def browser_session(payload):
+    import os,re
+    if sys.platform!='darwin' or os.getenv('OVD_LOCAL_BROWSER')!='1' or payload.get('cookiebrowser')!='chrome':
+        raise RuntimeError('Local Chrome session access is disabled on this server.')
+    profile=payload.get('cookieprofile','Default')
+    if not re.fullmatch(r'Default|Profile [0-9]+',profile):raise RuntimeError('Invalid Chrome profile selection.')
+    try:
+        original=extract_cookies_from_browser('chrome',profile=profile,logger=QuietLogger())
+    except FileNotFoundError:
+        raise RuntimeError('No Chrome cookie database was found for this profile. Open Chrome, sign into YouTube, and retry.') from None
+    except PermissionError:
+        raise RuntimeError('macOS denied Chrome session access. Allow the local Python request in the macOS Keychain prompt, then retry.') from None
+    except Exception:
+        raise RuntimeError('Chrome session could not be read or decrypted. Check the macOS Keychain prompt and the selected Chrome profile.') from None
+    scoped=YoutubeDLCookieJar()
+    for cookie in original:
+        if cookie.domain.lstrip('.').lower() in {'youtube.com','www.youtube.com','m.youtube.com'} and not cookie.is_expired():scoped.set_cookie(cookie)
+    original.clear(); scoped.filename=None; scoped.set_policy(SecureSessionPolicy())
+    if not any(c.name in {'SID','SAPISID','__Secure-1PSID','__Secure-3PSID','__Secure-1PAPISID','__Secure-3PAPISID'} for c in scoped):
+        raise RuntimeError('No signed-in YouTube session was readable in this Chrome profile. Sign into YouTube in that profile and allow Keychain access if prompted.')
+    return scoped
+
+
+def source_failure(exc):
+    # Classify internally; never return raw extractor diagnostics, URLs, headers or tokens.
+    text=str(exc).lower()
+    if any(x in text for x in ['not a bot','confirm you’re not','confirm you\'re not']):return 'YouTube requires browser verification and refused the downloader session. No bypass was attempted.'
+    if any(x in text for x in ['members-only','members only','join this channel']):return 'YouTube did not accept this session as a member for this video. Verify the selected Chrome account can play it.'
+    if 'private video' in text:return 'YouTube reports this video is private or unavailable to this account.'
+    if 'age' in text and ('confirm' in text or 'restricted' in text):return 'YouTube requires account age verification in the browser.'
+    if any(x in text for x in ['po token','proof of origin']):return 'YouTube requires a proof-of-origin token for this request. This app has no token provider; no bypass was attempted.'
+    if '403' in text:return 'YouTube or its media server refused access with HTTP 403.'
+    if '429' in text:return 'YouTube rate-limited this request with HTTP 429. Stop and retry later.'
+    if 'requested format is not available' in text:return 'YouTube did not provide a usable requested format for this session.'
+    if 'video unavailable' in text or 'not available' in text:return 'YouTube reports this video is unavailable to this downloader session.'
+    return 'Download failed. The source may be unavailable, protected, or exceed the size limit.'
 
 
 def execute(payload):
@@ -35,9 +74,12 @@ def execute(payload):
     # This limit is inherited by FFmpeg and also bounds unknown-size sources.
     resource.setrlimit(resource.RLIMIT_FSIZE, (MAX_FILESIZE, MAX_FILESIZE))
     opts = ydl_base_opts() | {"logger": QuietLogger()}
+    memory_session=browser_session(payload) if payload.get("cookiebrowser") else None
     def new_ydl(options):
         ydl = yt_dlp.YoutubeDL(options)
-        if payload.get('cookiefile'):
+        if memory_session is not None:
+            ydl.cookiejar=memory_session
+        elif payload.get('cookiefile'):
             # Load read-only: disconnect/replacement is coordinated by the parent.
             jar=YoutubeDLCookieJar(payload['cookiefile']); jar.load(ignore_discard=True,ignore_expires=False)
             jar.filename=None
@@ -140,7 +182,7 @@ if __name__ == "__main__":
         execute(json.loads(sys.stdin.readline()))
     except Exception as exc:
         if isinstance(exc, yt_dlp.utils.DownloadError):
-            message = "Download failed. The source may be unavailable, protected, or exceed the size limit."
+            message = source_failure(exc)
         elif isinstance(exc, OSError) and exc.errno == 28:
             message = "Insufficient server storage."
         elif isinstance(exc, OSError) and exc.errno == 27:

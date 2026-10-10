@@ -186,19 +186,29 @@ async def checked_url(url):
 
 
 async def run_worker(payload, timeout, job=None):
-    process = await asyncio.create_subprocess_exec(
-        sys.executable, "-u", str(BASE_DIR / "worker.py"),
-        stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.DEVNULL, start_new_session=True, limit=1024*1024)
+    # yt-dlp makes a short-lived SQLite read copy. Contain it in a private worker
+    # directory and remove it even when that worker is cancelled or times out.
+    session_area=tempfile.mkdtemp(prefix='browser-read-',dir=CONFIG_DIR) if payload.get('cookiebrowser') else None
+    child_env=os.environ.copy()
+    if session_area: child_env['TMPDIR']=session_area
+    try:
+        process = await asyncio.create_subprocess_exec(
+            sys.executable, "-u", str(BASE_DIR / "worker.py"), env=child_env,
+            stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL, start_new_session=True, limit=1024*1024)
+    except BaseException:
+        if session_area: shutil.rmtree(session_area,ignore_errors=True)
+        raise
     PROCESSES.add(process)
-    process.stdin.write(json.dumps(payload).encode() + b"\n")
-    await process.stdin.drain()
-    process.stdin.close()
     result = None
     failure = None
     started = time.monotonic()
-    read_task = asyncio.create_task(process.stdout.readline())
+    read_task = None
     try:
+        process.stdin.write(json.dumps(payload).encode() + b"\n")
+        await process.stdin.drain()
+        process.stdin.close()
+        read_task = asyncio.create_task(process.stdout.readline())
         while True:
             if STOPPING or (job and job.get("cancel_requested")):
                 raise asyncio.CancelledError
@@ -230,9 +240,13 @@ async def run_worker(payload, timeout, job=None):
             raise RuntimeError(failure or "Media worker failed. The source may be unavailable or protected.")
         return result
     finally:
-        read_task.cancel()
-        await asyncio.gather(read_task, return_exceptions=True)
-        await stop_process(process)
+        if read_task:
+            read_task.cancel()
+            await asyncio.gather(read_task, return_exceptions=True)
+        try:
+            await stop_process(process)
+        finally:
+            if session_area: shutil.rmtree(session_area,ignore_errors=True)
 
 
 async def run_download(job_id, payload):
@@ -316,6 +330,9 @@ async def lifespan(_app):
     STOPPING = False
     global STORE, QUEUE_PAUSED
     ensure_storage()
+    for session_area in CONFIG_DIR.glob('browser-read-*'):
+        if session_area.is_dir() and not session_area.is_symlink():
+            shutil.rmtree(session_area,ignore_errors=True)
     STORE = Store(STATE_DIR/'library.sqlite3')
     JOBS.clear()
     for job_id, job in STORE.all('job').items():
@@ -428,7 +445,7 @@ async def get_info(payload: UrlPayload):
     task = None
     try:
         url = await checked_url(str(payload.url))
-        task = track(asyncio.create_task(run_worker({"mode": "info", "url": url, "cookiefile": accounts.cookie_path(url,payload.account,STORE,CONFIG_DIR)}, INFO_TIMEOUT_SECONDS)))
+        task = track(asyncio.create_task(run_worker({"mode": "info", "url": url, **accounts.worker_credentials(url,payload.account,STORE,CONFIG_DIR)}, INFO_TIMEOUT_SECONDS)))
         result=await task
         if payload.account=='youtube':
             record=STORE.get('account','youtube')
@@ -587,7 +604,7 @@ def launch(job_id):
         if job.get('destination')=='library' and (directory_bytes(LIBRARY_DIR)+MAX_FILESIZE>MAX_LIBRARY_BYTES or shutil.disk_usage(LIBRARY_DIR).free<MIN_FREE_DISK_BYTES+MAX_TEMP_BYTES_PER_JOB+MAX_FILESIZE):
             raise HTTPException(507,'Insufficient library capacity for this queued job.')
         payload=dict(job['payload'])
-        payload['cookiefile']=accounts.cookie_path(payload['url'],payload.get('account',''),STORE,CONFIG_DIR)
+        payload.update(accounts.worker_credentials(payload['url'],payload.get('account',''),STORE,CONFIG_DIR))
     except (HTTPException,OSError,RuntimeError) as exc:
         job.update(status='error',error=exc.detail if isinstance(exc,HTTPException) else 'Server storage is unavailable.',expires_at=time.time()+JOB_TTL_SECONDS)
         persist_job(job); shutil.rmtree(job['job_dir'],ignore_errors=True)
@@ -895,7 +912,7 @@ class CookiePayload(BaseModel):
 
 @app.get('/api/accounts')
 async def connected_accounts():
-    return {'accounts':[accounts.account_status(STORE,CONFIG_DIR)],'supported':['youtube']}
+    return {'accounts':[accounts.account_status(STORE,CONFIG_DIR)],'supported':['youtube'],'chrome_profiles':accounts.chrome_profiles()}
 
 
 @app.post('/api/accounts/youtube')
@@ -904,6 +921,21 @@ async def connect_youtube(payload: CookiePayload):
     if any(j['status'] not in TERMINAL and j.get('payload',{}).get('account')=='youtube' for j in JOBS.values()) or ANALYSIS_BUSY:
         raise HTTPException(409,'Wait for account jobs and analysis to finish before replacing a session.')
     return accounts.import_cookies(payload.cookies,CONFIG_DIR,STORE)
+
+
+class BrowserConnectionPayload(BaseModel):
+    profile: str = Field(default='Default',max_length=30)
+
+
+@app.post('/api/accounts/youtube/browser')
+async def connect_local_browser(payload: BrowserConnectionPayload, request: Request):
+    if not security.loopback_setup(request):
+        raise HTTPException(403,'Use the local Mac preview on 127.0.0.1:8001.')
+    if ANALYSIS_BUSY or any(j['status'] not in TERMINAL and j.get('payload',{}).get('account')=='youtube' for j in JOBS.values()):
+        raise HTTPException(409,'Wait for account activity before changing the connection.')
+    if (CONFIG_DIR/'youtube.cookies.txt').exists():
+        raise HTTPException(409,'Disconnect the imported session before selecting Chrome.')
+    return accounts.connect_chrome(payload.profile,STORE)
 
 
 @app.delete('/api/accounts/youtube')
@@ -933,10 +965,10 @@ async def scan_membership(payload: ScanPayload):
     if ANALYSIS_BUSY: raise HTTPException(429,'Another analysis is running.')
     if any(j['status'] not in TERMINAL and j.get('payload',{}).get('account') for j in JOBS.values()):
         raise HTTPException(409,'Wait for account downloads before scanning.')
-    cookiefile=accounts.cookie_path(url,'youtube',STORE,CONFIG_DIR)
+    credentials=accounts.worker_credentials(url,'youtube',STORE,CONFIG_DIR)
     ANALYSIS_BUSY=True
     try:
-        result=await track(asyncio.create_task(run_worker(dict(mode='scan',url=url,cookiefile=cookiefile,limit=payload.limit,verified_channels=status['verified_channels']),180)))
+        result=await track(asyncio.create_task(run_worker(dict(mode='scan',url=url,**credentials,limit=payload.limit,verified_channels=status['verified_channels']),180)))
         manifest_id=stable_key(url)
         existing=STORE.get('manifest',manifest_id) or {'manifest_id':manifest_id,'source':url,'entries':{}}
         for entry in result['entries']:

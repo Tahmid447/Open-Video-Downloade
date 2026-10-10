@@ -149,6 +149,8 @@ async function refreshSettings() {
   const auth=await window.api('/api/auth/status'); $('mfaState').textContent=auth.mfa_enabled?'Authenticator enabled.':'Authenticator not enabled.'; $('mfaForm').classList.toggle('hidden',auth.mfa_enabled);
   const [storage,account]=await Promise.all([window.api('/api/storage'),window.api('/api/accounts')]);
   message('storageDashboard',`Library ${fmtSize(storage.library_bytes)} / ${fmtSize(storage.library_limit)} · Temporary ${fmtSize(storage.temporary_bytes)} / ${fmtSize(storage.temporary_limit)} · ${fmtSize(storage.free_bytes)} free · Queue ${storage.queue_paused?'paused':'running'}`);
+  const profiles=account.chrome_profiles || []; $('localBrowserConnection').classList.toggle('hidden',!profiles.length);
+  $('chromeProfile').replaceChildren(...profiles.map(profile=>{const option=document.createElement('option');option.value=profile;option.textContent=profile;return option;}));
   const value=account.accounts[0]; message('accountState',`YouTube: ${value.status} · ${value.verified_channels?.length || 0} channels verified for membership import${value.expires_at?' · Earliest cookie expiry '+new Date(value.expires_at*1000).toLocaleDateString():''}`);
 }
 $('savePreferences').addEventListener('click',()=>perform('settingsMessage',async()=>{
@@ -209,3 +211,9 @@ $('mfaForm').addEventListener('submit',event=>{event.preventDefault();perform('m
   $('mfaPassword').value=''; $('mfaCode').value=''; $('mfaSecret').textContent=''; $('mfaEnrollment').classList.add('hidden');
   await boot(); message('loginMessage','MFA enabled. Sign in with password and a fresh authenticator code.');
 });});
+
+$('connectChrome').addEventListener('click',()=>perform('settingsMessage',async()=>{
+  await window.api('/api/accounts/youtube/browser',{method:'POST',body:jsonBody({profile:$('chromeProfile').value})});
+  message('settingsMessage','Chrome selected. Analyze one accessible video using YouTube connection to verify access.');
+  await refreshSettings();
+}));
