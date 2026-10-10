@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+  <meta name="theme-color" content="#0b1020" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Downloader" />
+  <title>Open Video Downloader</title>
+  <link rel="manifest" href="/static/manifest.webmanifest" />
+  <link rel="apple-touch-icon" href="/static/apple-touch-icon.png" />
+  <link rel="stylesheet" href="/static/style.css?v=4" />
+</head>
+<body>
+  <main class="wrap">
+    <section class="hero">
+      <div class="topline">
+        <div class="privacy-badge"><span class="privacy-dot"></span>Private on your Tailscale network</div>
+        <div class="version-badge">Cloud</div>
+      </div>
+
+      <div class="hero-copy">
+        <h1>Open Video Downloader</h1>
+        <p>Paste a public or authorized media link, choose the quality, watch real progress, cancel anytime, and save it with the filename you want.</p>
+      </div>
+
+      <div class="search" role="search">
+        <div class="url-shell">
+          <input aria-label="Media URL" id="url" type="url" placeholder="Paste a video URL" autocomplete="off" autocapitalize="none" spellcheck="false" />
+          <button id="pasteUrl" class="ghost compact" type="button">Paste</button>
+        </div>
+        <button id="analyze" class="primary" type="button">Analyze</button>
+      </div>
+      <div id="storageWarning" class="status bad hidden" role="alert"></div>
+      <div id="status" class="status" aria-live="polite"></div>
+
+      <section id="progressPanel" class="progress-panel hidden" aria-live="polite">
+        <div class="progress-head">
+          <div>
+            <div class="eyebrow">CURRENT JOB</div>
+            <strong id="progressStage">Preparing download…</strong>
+          </div>
+          <span id="progressPercent">0%</span>
+        </div>
+
+        <div class="progress-track" role="progressbar" aria-label="Download progress" aria-valuemin="0" aria-valuemax="100">
+          <div id="progressBar" class="progress-bar"></div>
+        </div>
+        <div id="progressDetails" class="progress-details"></div>
+
+        <div id="runningActions" class="progress-actions">
+          <button id="cancelDownload" class="danger" type="button">Cancel download</button>
+        </div>
+
+        <div id="savePanel" class="save-panel hidden">
+          <label for="saveName">Save as</label>
+          <div class="filename-shell">
+            <input id="saveName" type="text" maxlength="120" autocomplete="off" spellcheck="false" />
+            <span id="saveExt" class="file-ext"></span>
+          </div>
+          <div class="save-actions">
+            <button id="saveFile" class="success" type="button">Save file</button>
+            <button id="removeFile" class="ghost" type="button">Remove server file</button>
+            <button id="newDownload" class="secondary" type="button">New download</button>
+          </div>
+          <p id="fileExpiry" class="save-note"></p>
+          <p class="save-note">You can rename it here even after the download has finished.</p>
+        </div>
+      </section>
+    </section>
+
+    <section id="result" class="card hidden">
+      <div class="media">
+        <img id="thumb" alt="" />
+        <div class="media-copy">
+          <div class="eyebrow">MEDIA FOUND</div>
+          <h2 id="title"></h2>
+          <div id="meta" class="muted"></div>
+        </div>
+      </div>
+
+      <div class="filename-block">
+        <div class="field-head">
+          <label for="filename">Filename</label>
+          <span>Editable before download</span>
+        </div>
+        <input id="filename" type="text" maxlength="120" autocomplete="off" spellcheck="false" />
+        <div class="field-hint">The correct file extension is added automatically.</div>
+      </div>
+
+      <div class="actions">
+        <button id="best" class="primary" type="button">Download best quality</button>
+        <button id="audio" class="secondary" type="button">Audio only</button>
+      </div>
+
+      <details class="formats-panel">
+        <summary>
+          <span>Choose an exact format</span>
+          <span class="summary-hint">Advanced</span>
+        </summary>
+        <div id="formats" class="formats"></div>
+      </details>
+    </section>
+
+    <section class="card" aria-label="Recent jobs">
+      <div class="field-head"><strong>Recent jobs</strong><span id="serverStorage"></span></div>
+      <div id="recentJobs" class="history-list"></div>
+      <p class="save-note">Temporary files and history expire automatically. Server restarts clear history and abandoned files.</p>
+    </section>
+
+    <section class="tips-card">
+      <div>
+        <strong>Tip for iPhone</strong>
+        <p>In Safari, use Share → Add to Home Screen. Then this private downloader opens like an app.</p>
+      </div>
+      <span class="tip-icon">↗</span>
+    </section>
+
+    <p class="foot">
+      For public or authorized, non-DRM media. This build does not bypass DRM, paywalls, private accounts, or other access controls.
+    </p>
+  </main>
+  <script src="/static/app.js?v=4"></script>
+</body>
+</html>

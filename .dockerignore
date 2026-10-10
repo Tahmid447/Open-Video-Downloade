@@ -1,0 +1,13 @@
+*
+!Dockerfile
+!requirements.txt
+!app.py
+!common.py
+!worker.py
+!network_guard.py
+!static/
+!static/**
+!templates/
+!templates/**
+!deploy/
+!deploy/healthcheck.sh

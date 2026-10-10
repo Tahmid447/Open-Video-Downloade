@@ -1,0 +1,39 @@
+name: open-video-downloader
+services:
+  downloader:
+    image: ${OVD_IMAGE:-open-video-downloader:local}
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 15s
+    ports:
+      - "127.0.0.1:${OVD_PORT:-8000}:8000"
+    env_file: .env
+    environment:
+      DOWNLOAD_DIR: /data/downloads
+    volumes:
+      - media:/data/downloads
+    tmpfs:
+      - /tmp:size=128m,mode=1777
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 128
+    mem_limit: ${OVD_MEMORY_LIMIT:-768m}
+    cpus: ${OVD_CPUS:-1.5}
+    logging:
+      driver: local
+      options:
+        max-size: "10m"
+        max-file: "3"
+    dns: [1.1.1.1, 9.9.9.9]
+    networks: [private]
+volumes:
+  media:
+networks:
+  private:
+    enable_ipv6: false
+    driver_opts:
+      com.docker.network.bridge.name: ovd0
