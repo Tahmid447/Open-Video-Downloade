@@ -71,10 +71,11 @@ logger = logging.getLogger("uvicorn.error")
 
 class UrlPayload(BaseModel):
     url: HttpUrl
-    account: Literal["", "youtube"] = ""
+    account: Literal["", "youtube", "auto"] | None = None
 
 
 class DownloadPayload(UrlPayload):
+    analysis_id: str | None = Field(default=None,max_length=64)
     format_id: str = Field(default="", max_length=200)
     quality: Literal[0, 2160, 1440, 1080, 720, 480, 360] = 0
     destination: Literal["transfer", "library"] = "library"
@@ -304,11 +305,8 @@ async def run_download(job_id, payload):
     except Exception as exc:
         # Do not put source URLs, credentials or verbose yt-dlp stderr in logs.
         job.update(status="error", error=str(exc) or "Media worker timed out.", speed=None, eta=None)
-        if payload.get('account') and STORE:
-            record=STORE.get('account',payload['account'])
-            if record:
-                record.update(status='needs_attention',last_failed_at=time.time())
-                STORE.put('account',payload['account'],record)
+        if payload.get('account')=='youtube' and STORE:
+            accounts.record_failure(str(exc),STORE)
         logger.warning("Job %s failed: %s", job_id[:8], type(exc).__name__)
     finally:
         if job["status"] != "completed" or job.get("library_id"):
@@ -445,17 +443,22 @@ async def get_info(payload: UrlPayload):
     task = None
     try:
         url = await checked_url(str(payload.url))
-        task = track(asyncio.create_task(run_worker({"mode": "info", "url": url, **accounts.worker_credentials(url,payload.account,STORE,CONFIG_DIR)}, INFO_TIMEOUT_SECONDS)))
+        account=accounts.resolve_account(url,payload.account,STORE,CONFIG_DIR)
+        task = track(asyncio.create_task(run_worker({"mode":"info","url":url,"account":account,**accounts.worker_credentials(url,account,STORE,CONFIG_DIR)},INFO_TIMEOUT_SECONDS)))
         result=await task
-        if payload.account=='youtube':
-            record=STORE.get('account','youtube')
-            if record:
-                record.update(last_checked_at=time.time())
-                STORE.put('account','youtube',record)
-        STORE.put('preview',stable_key(url),{'metadata':result,'account':payload.account,'created_at':time.time()})
-        return result
+        if account=='youtube':accounts.record_success(result,STORE)
+        analysis_id=uuid.uuid4().hex
+        connection=accounts.account_status(STORE,CONFIG_DIR) if account else {}
+        cached={'metadata':result,'url':url,'account':account,'connection_id':connection.get('connection_id'),'created_at':time.time()}
+        STORE.put('preview',stable_key(url),cached)
+        STORE.put('analysis',analysis_id,cached)
+        # Analysis tokens contain metadata only, are owner-protected and expire in 30 minutes.
+        for old_id,old in STORE.all('analysis').items():
+            if time.time()-old['created_at']>1800:STORE.delete('analysis',old_id)
+        return result | {'analysis_id':analysis_id,'account':account}
     except (RuntimeError, asyncio.TimeoutError) as exc:
-        raise HTTPException(422, str(exc) or "Link analysis timed out.") from exc
+        if locals().get('account')=='youtube':accounts.record_failure(str(exc),STORE)
+        raise HTTPException(422,str(exc) or "Link analysis timed out.") from exc
     except asyncio.CancelledError:
         raise HTTPException(503, "Server is shutting down.")
     finally:
@@ -467,14 +470,22 @@ async def start_download(payload: DownloadPayload):
     if STOPPING or not dependencies_ready():
         raise HTTPException(503, "Server is not ready: check FFmpeg and yt-dlp.")
     url = await checked_url(str(payload.url))
-    accounts.cookie_path(url,payload.account,STORE,CONFIG_DIR)
+    account=accounts.resolve_account(url,payload.account,STORE,CONFIG_DIR)
+    accounts.cookie_path(url,account,STORE,CONFIG_DIR)
+    if payload.analysis_id:
+        analysis=STORE.get('analysis',payload.analysis_id)
+        if not analysis or time.time()-analysis['created_at']>1800 or stable_key(analysis['url'])!=stable_key(url):
+            raise HTTPException(409,'Analyze this URL again before downloading.')
+        connection_id=accounts.account_status(STORE,CONFIG_DIR).get('connection_id') if account else None
+        if analysis['account']!=account or analysis.get('connection_id')!=connection_id:
+            raise HTTPException(409,'The account selection changed. Analyze again so analysis and download use the same connection.')
     format_id = payload.format_id.strip()
     if format_id and not re.fullmatch(r"[A-Za-z0-9_.+\-,:/]+", format_id):
         raise HTTPException(400, "Invalid format id.")
     cleanup_stale_jobs()
     key = stable_key(url)
     cached=STORE.get('preview',key)
-    if cached and time.time()-cached['created_at']<300 and cached['account']==payload.account:
+    if cached and time.time()-cached['created_at']<300 and cached['account']==account:
         key=cached['metadata'].get('media_key') or key
     if not payload.force:
         for old_id, old in JOBS.items():
@@ -508,7 +519,7 @@ async def start_download(payload: DownloadPayload):
     job_dir = DOWNLOAD_DIR/job_id; job_dir.mkdir(mode=0o700)
     requested_name = _sanitize_stem(payload.filename)
     worker_payload = dict(mode='download',url=url,format_id=format_id,audio_only=payload.audio_only,
-        quality=payload.quality,account=payload.account,force=payload.force,members_only=payload.members_only,
+        quality=payload.quality,account=account,force=payload.force,members_only=payload.members_only,
         requested_name=requested_name,job_dir=str(job_dir))
     job = dict(job_id=job_id,status='queued',progress=0,requested_name=requested_name,
         job_dir=str(job_dir),created_at=time.time(),cancel_requested=False,leases=0,
@@ -892,16 +903,17 @@ async def storage_dashboard():
 class Preferences(BaseModel):
     destination: Literal['library','transfer']='library'
     quality: Literal[0,2160,1440,1080,720,480,360]=0
+    account_mode: Literal['auto','public','youtube']='auto'
 
 
 @app.get('/api/settings')
 async def get_settings():
-    return STORE.get('settings','owner') or {'destination':'library','quality':0}
+    return {'destination':'library','quality':0,'account_mode':'auto'} | (STORE.get('settings','owner') or {})
 
 
 @app.put('/api/settings')
 async def save_settings(payload: Preferences):
-    value=STORE.get('settings','owner') or {}; value.update(payload.model_dump())
+    value=STORE.get('settings','owner') or {}; value.update(payload.model_dump(exclude_unset=True))
     STORE.put('settings','owner',value); return value
 
 
@@ -912,7 +924,49 @@ class CookiePayload(BaseModel):
 
 @app.get('/api/accounts')
 async def connected_accounts():
-    return {'accounts':[accounts.account_status(STORE,CONFIG_DIR)],'supported':['youtube'],'chrome_profiles':accounts.chrome_profiles()}
+    return {'accounts':[accounts.account_status(STORE,CONFIG_DIR)],'supported':['youtube'],'local_chrome_available':accounts.local_chrome_available()}
+
+
+@app.get('/api/accounts/youtube/profiles')
+async def local_profiles(request: Request):
+    if not security.loopback_setup(request):raise HTTPException(403,'Chrome profiles are available only in the local Mac app.')
+    return {'profiles':accounts.chrome_profiles()}
+
+
+class BrowserVerificationPayload(BaseModel):
+    profile: str = Field(default='Default',max_length=30)
+    url: HttpUrl
+
+
+@app.post('/api/accounts/youtube/browser/verify')
+async def verify_browser_connection(payload: BrowserVerificationPayload,request: Request):
+    global ANALYSIS_BUSY
+    if not security.loopback_setup(request):raise HTTPException(403,'Use the local Mac app on 127.0.0.1:8001.')
+    if ANALYSIS_BUSY or any(j['status'] not in TERMINAL and j.get('payload',{}).get('account')=='youtube' for j in JOBS.values()):
+        raise HTTPException(409,'Wait for account activity before verifying a connection.')
+    url=await checked_url(str(payload.url))
+    parsed=urlparse(url)
+    from urllib.parse import parse_qs
+    video_id=parse_qs(parsed.query).get('v',[''])[0] if parsed.path=='/watch' else parsed.path.strip('/').split('/')[-1]
+    if not accounts.youtube_url(url) or parsed.scheme!='https' or not re.fullmatch(r'[A-Za-z0-9_-]{11}',video_id) or not (parsed.path=='/watch' or parsed.hostname=='youtu.be' or parsed.path.startswith(('/shorts/','/live/'))):
+        raise HTTPException(400,'Provide one HTTPS YouTube video you can already watch, not a channel or playlist.')
+    if (CONFIG_DIR/'youtube.cookies.txt').exists():raise HTTPException(409,'Disconnect the imported session before selecting Chrome.')
+    candidate=accounts.chrome_connection(payload.profile)
+    previous=STORE.get('account','youtube')
+    ANALYSIS_BUSY=True
+    try:
+        info=await track(asyncio.create_task(run_worker({'mode':'info','url':url,'account':'youtube','cookiebrowser':'chrome','cookieprofile':payload.profile},INFO_TIMEOUT_SECONDS)))
+        if info.get('availability')!='subscriber_only' or not info.get('channel_id') or not info.get('formats'):
+            raise HTTPException(422,'This video did not confirm membership access. Provide one members-only video you can already watch. Your saved connection was kept.')
+        if previous and previous.get('source')=='browser' and previous.get('profile')==payload.profile:
+            candidate=previous
+        STORE.put('account','youtube',candidate)
+        accounts.record_success(info,STORE)
+        return {'account':accounts.account_status(STORE,CONFIG_DIR),'message':'YouTube session and membership access confirmed. This profile is saved for automatic reuse.'}
+    except (RuntimeError,asyncio.TimeoutError) as exc:
+        if previous and previous.get('source')=='browser' and previous.get('profile')==payload.profile:accounts.record_failure(str(exc),STORE)
+        raise HTTPException(422,str(exc) or 'Connection verification timed out. Your saved connection was kept.') from exc
+    finally:ANALYSIS_BUSY=False
 
 
 @app.post('/api/accounts/youtube')

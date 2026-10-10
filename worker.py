@@ -24,9 +24,11 @@ class SecureSessionPolicy(DefaultCookiePolicy):
 
 
 class QuietLogger:
+    keychain_failed=False
     def debug(self, _message, *args, **kwargs): pass
     def info(self, _message, *args, **kwargs): pass
-    def warning(self, _message, *args, **kwargs): pass
+    def warning(self, _message, *args, **kwargs):
+        if 'find-generic-password failed' in _message:self.keychain_failed=True
     def error(self, _message, *args, **kwargs): pass
 
 
@@ -36,28 +38,33 @@ def browser_session(payload):
         raise RuntimeError('Local Chrome session access is disabled on this server.')
     profile=payload.get('cookieprofile','Default')
     if not re.fullmatch(r'Default|Profile [0-9]+',profile):raise RuntimeError('Invalid Chrome profile selection.')
+    logger=QuietLogger()
     try:
-        original=extract_cookies_from_browser('chrome',profile=profile,logger=QuietLogger())
+        original=extract_cookies_from_browser('chrome',profile=profile,logger=logger)
     except FileNotFoundError:
         raise RuntimeError('No Chrome cookie database was found for this profile. Open Chrome, sign into YouTube, and retry.') from None
     except PermissionError:
         raise RuntimeError('macOS denied Chrome session access. Allow the local Python request in the macOS Keychain prompt, then retry.') from None
     except Exception:
         raise RuntimeError('Chrome session could not be read or decrypted. Check the macOS Keychain prompt and the selected Chrome profile.') from None
+    expired_auth=any(c.name in {'SID','SAPISID','__Secure-1PSID','__Secure-3PSID','__Secure-1PAPISID','__Secure-3PAPISID'} and c.domain.lstrip('.').lower() in {'youtube.com','www.youtube.com','m.youtube.com'} and c.is_expired() for c in original)
     scoped=YoutubeDLCookieJar()
     for cookie in original:
         if cookie.domain.lstrip('.').lower() in {'youtube.com','www.youtube.com','m.youtube.com'} and not cookie.is_expired():scoped.set_cookie(cookie)
     original.clear(); scoped.filename=None; scoped.set_policy(SecureSessionPolicy())
     if not any(c.name in {'SID','SAPISID','__Secure-1PSID','__Secure-3PSID','__Secure-1PAPISID','__Secure-3PAPISID'} for c in scoped):
+        if logger.keychain_failed:raise RuntimeError('macOS denied Chrome session access. Allow the local Python request in the macOS Keychain prompt, then retry.')
+        if expired_auth:raise RuntimeError('The saved YouTube session has expired. Sign into YouTube in the saved Chrome profile and recheck it in Settings.')
         raise RuntimeError('No signed-in YouTube session was readable in this Chrome profile. Sign into YouTube in that profile and allow Keychain access if prompted.')
     return scoped
 
 
-def source_failure(exc):
+def source_failure(exc, authenticated=True):
     # Classify internally; never return raw extractor diagnostics, URLs, headers or tokens.
     text=str(exc).lower()
     if any(x in text for x in ['not a bot','confirm you’re not','confirm you\'re not']):return 'YouTube requires browser verification and refused the downloader session. No bypass was attempted.'
-    if any(x in text for x in ['members-only','members only','join this channel']):return 'YouTube did not accept this session as a member for this video. Verify the selected Chrome account can play it.'
+    if any(x in text for x in ['members-only','members only','join this channel']):
+        return ('YouTube did not accept this session as a member for this video. Verify the selected account can play it.' if authenticated else 'This members-only video was requested without a YouTube connection. Connect YouTube in Settings, or switch Public mode to Automatic and analyze again.')
     if 'private video' in text:return 'YouTube reports this video is private or unavailable to this account.'
     if 'age' in text and ('confirm' in text or 'restricted' in text):return 'YouTube requires account age verification in the browser.'
     if any(x in text for x in ['po token','proof of origin']):return 'YouTube requires a proof-of-origin token for this request. This app has no token provider; no bypass was attempted.'
@@ -179,10 +186,11 @@ def execute(payload):
 
 if __name__ == "__main__":
     try:
-        execute(json.loads(sys.stdin.readline()))
+        payload=json.loads(sys.stdin.readline())
+        execute(payload)
     except Exception as exc:
         if isinstance(exc, yt_dlp.utils.DownloadError):
-            message = source_failure(exc)
+            message = source_failure(exc,authenticated=bool(locals().get('payload',{}).get('cookiebrowser') or locals().get('payload',{}).get('cookiefile')))
         elif isinstance(exc, OSError) and exc.errno == 28:
             message = "Insufficient server storage."
         elif isinstance(exc, OSError) and exc.errno == 27:

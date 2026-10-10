@@ -42,7 +42,7 @@
         </div>
         <button id="analyze" class="primary" type="button">Analyze</button>
       </div>
-      <label class="connection-choice">Analyze with<select id="analysisAccount"><option value="">Public / no account</option><option value="youtube">YouTube connection</option></select></label>
+      <label class="connection-choice">Account mode<select id="analysisAccount"><option value="auto">Automatic · use saved connections</option><option value="public">Public · no account</option></select></label><p id="connectionHint" class="muted" aria-live="polite"></p>
       <div id="storageWarning" class="status bad hidden" role="alert"></div>
       <div id="status" class="status" aria-live="polite"></div>
 
@@ -102,7 +102,7 @@
 
       <p id="description" class="muted"></p><p id="subtitleInfo" class="muted"></p>
       <div class="options"><label>Save to<select id="destination"><option value="library">Server library · keep until deleted</option><option value="transfer">Quick transfer · temporary</option></select></label>
-      <label>Account<select id="quickAccount"><option value="">Public / no account</option><option value="youtube">YouTube connection</option></select></label></div>
+      <p id="downloadConnection" class="muted">Analysis and download use the same connection.</p></div>
       <label><input id="forceDownload" type="checkbox"/> Force a new copy even if already downloaded</label>
       <div id="qualityButtons" class="actions"></div>
       <div class="actions">
@@ -130,7 +130,7 @@
       <label for="batchUrls">Media URLs</label><textarea id="batchUrls" rows="7" placeholder="https://…"></textarea>
       <div class="options"><label>Destination<select id="batchDestination"><option value="library">Server library</option><option value="transfer">Quick transfer</option></select></label>
       <label>Quality ceiling<select id="batchQuality"><option value="0">Best available</option><option>2160</option><option>1440</option><option>1080</option><option>720</option><option>480</option><option>360</option></select></label>
-      <label>Account<select id="batchAccount"><option value="">Public / no account</option><option value="youtube">YouTube connection</option></select></label></div>
+      <label>Account<select id="batchAccount"><option value="auto">Automatic · use saved connections</option><option value="">Public / no account</option><option value="youtube">YouTube connection</option></select></label></div>
       <div class="actions"><button id="queueBatch" class="primary">Queue links</button><button id="pauseQueue" class="secondary">Pause queued jobs</button><button id="resumeQueue" class="secondary">Resume queue</button><button id="cancelQueued" class="danger">Cancel queued jobs</button></div>
       <p id="batchMessage" aria-live="polite"></p><p class="save-note">Pause stops new starts; active jobs continue. Retry starts a fresh download. Partial-file resume is not enabled.</p>
     </section>
@@ -161,11 +161,22 @@
       <form id="mfaForm"><label>Confirm owner password<input id="mfaPassword" type="password" autocomplete="current-password" maxlength="256" required/></label><button id="mfaStart" type="button" class="secondary">Set up authenticator</button>
       <div id="mfaEnrollment" class="hidden"><p>Add this secret manually to your authenticator. Keep it private.</p><code id="mfaSecret"></code><label>Six-digit authenticator code<input id="mfaCode" inputmode="numeric" autocomplete="one-time-code" maxlength="6" required pattern="[0-9]{6}"/></label><button class="primary">Enable MFA</button></div></form>
       <p id="mfaMessage" role="alert"></p><h3>Account connections</h3><p id="accountState" class="muted"></p>
-      <p class="save-note">Import an explicitly exported Netscape file containing only youtube.com cookies. The server stores it with private permissions. Your Mac session does not automatically connect a VPS. Never supply your password or a whole browser profile.</p>
-      <div id="localBrowserConnection" class="hidden"><p>Local Mac: use your signed-in Chrome session without creating a cookie export. Only YouTube cookies are retained in memory during each worker. macOS may ask for Keychain permission.</p><label>Chrome profile<select id="chromeProfile"></select></label><button id="connectChrome" class="secondary">Connect local Chrome</button></div>
-      <label>Session file<input id="cookieFile" type="file" accept=".txt"/></label>
-      <label><input id="cookieConsent" type="checkbox"/> This is my session, and I have permission to access the media.</label>
-      <div class="actions"><button id="connectAccount" class="secondary">Import YouTube session</button><button id="disconnectAccount" class="danger">Disconnect and delete session</button><button id="logout" class="ghost">Sign out</button></div>
+      <p id="sessionState" class="muted"></p><p id="membershipState" class="muted"></p>
+      <div class="actions"><button id="editChromeConnection" class="secondary hidden">Change or recheck connection</button><button id="disconnectAccount" class="danger hidden">Disconnect YouTube</button></div>
+      <div id="localBrowserConnection" class="hidden">
+        <h4>One-time YouTube setup</h4><p>Choose only the Chrome profile that can play your members-only video. We will verify that one video and save the profile for automatic reuse.</p>
+        <label>Chrome profile<select id="chromeProfile"></select></label>
+        <label>Authorized members-only test video<input id="connectionTestUrl" type="url" placeholder="Paste one YouTube video you can already watch" autocomplete="off"/></label>
+        <div class="actions"><button id="connectChrome" class="primary">Verify and save connection</button><button id="cancelChromeSetup" class="ghost">Cancel setup</button></div>
+        <p id="connectionSetupMessage" role="status"></p>
+      </div>
+      <details id="advancedAccountSetup"><summary>Advanced Account Setup · manual session-file import</summary>
+        <p class="save-note">For an authorized connection on this server, import a YouTube-only Netscape session file once. It is stored privately. A Mac Chrome connection does not transfer to Linux or a VPS. Never supply your password or a whole browser profile. Protect the server disk and backups.</p>
+        <label>Session file<input id="cookieFile" type="file" accept=".txt"/></label>
+        <label><input id="cookieConsent" type="checkbox"/> This is my session, and I have permission to access the media.</label>
+        <button id="connectAccount" class="secondary">Import YouTube session</button>
+      </details>
+      <button id="logout" class="ghost">Sign out</button>
       <p id="settingsMessage" aria-live="polite"></p>
     </section>
     <section class="tips-card">
@@ -180,7 +191,8 @@
       For public or authorized, non-DRM media. This build does not bypass DRM, paywalls, private accounts, or other access controls.
     </p>
   </main>
-  <script src="/static/app.js?v=5"></script>
-  <script src="/static/library.js?v=5"></script>
+  <script src="/static/app.js?v=6"></script>
+  <script src="/static/accounts.js?v=6"></script>
+  <script src="/static/library.js?v=6"></script>
 </body>
 </html>

@@ -1,5 +1,7 @@
 const $ = (id) => document.getElementById(id);
 let currentUrl = "";
+let analyzedAccount = null;
+let analysisId = null;
 let activeJobId = null;
 let completedJobId = null;
 let completedDownloadUrl = null;
@@ -54,7 +56,7 @@ function splitFilename(filename) {
 }
 
 function setDownloadButtonsDisabled(disabled) {
-  document.querySelectorAll("#best, #audio, .format button").forEach((button) => {
+  document.querySelectorAll("#best, #audio, #qualityButtons button, .format button").forEach((button) => {
     button.disabled = disabled;
   });
 }
@@ -205,25 +207,30 @@ function buildFormatRow(format, index) {
 }
 
 async function analyze() {
+  if(typeof accountModeSaving!=="undefined" && accountModeSaving) {try {await accountModeSaving;} catch {return setStatus("Account preference could not be saved. Try selecting the mode again.",true);}}
   const url = $("url").value.trim();
   if (!url) return setStatus("Paste a URL first.", true);
   if (activeJobId) return setStatus("Cancel the current download before analyzing another link.", true);
 
-  currentUrl = url;
+  currentUrl = url; analyzedAccount=null; analysisId=null;
   $("result").dataset.ready="0";
   $("result").classList.add("hidden");
   resetJobUI({hideProgress: true});
   setStatus("Analyzing media…");
   $("analyze").disabled = true;
+  $("analysisAccount").disabled=true;
 
   try {
     const res = await fetch("/api/info", {
       method: "POST",
       headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({url, account: $("analysisAccount").value}),
+      body: JSON.stringify({url, account: $("analysisAccount").value === "public" ? "" : "auto"}),
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.detail || "Analysis failed.");
+    analyzedAccount=data.account; analysisId=data.analysis_id;
+    $("downloadConnection").textContent=analyzedAccount==='youtube'?'Using your saved YouTube connection for analysis and download.':'Using public extraction for analysis and download.';
+    window.refreshAccountControls?.().catch(()=>{});
 
     if (data.kind==='embedded_choices') {
       const formats=$("formats"); formats.replaceChildren();
@@ -244,7 +251,6 @@ async function analyze() {
     $("filename").value = cleanClientFilename(data.suggested_filename || data.title || "download");
 
     const pieces = [];
-    $("quickAccount").value = $("analysisAccount").value;
     $("description").textContent = (data.description || "").slice(0, 500);
     $("subtitleInfo").textContent = `Subtitles: ${(data.subtitles || []).join(', ') || 'none listed'} · Automatic captions: ${(data.automatic_captions || []).join(', ') || 'none listed'}`;
     const qualities = $("qualityButtons"); qualities.replaceChildren();
@@ -270,6 +276,8 @@ async function analyze() {
     setStatus(error.message || "Analysis failed.", true);
   } finally {
     $("analyze").disabled = false;
+    $("analysisAccount").disabled=false;
+    window.refreshAccountControls?.().catch(()=>{});
   }
 }
 
@@ -313,7 +321,7 @@ async function pollDownload(jobId) {
 }
 
 async function startDownload(formatId = "", audioOnly = false, quality = null) {
-  if (!currentUrl) return setStatus("Analyze a link first.", true);
+  if (!currentUrl || $("url").value.trim()!==currentUrl || analyzedAccount===null || !analysisId) return setStatus("Analyze this link first so the download uses the same connection.", true);
   if (activeJobId) return setStatus("A download is already running.", true);
 
   const requestedName = cleanClientFilename($("filename").value || "download");
@@ -344,7 +352,7 @@ async function startDownload(formatId = "", audioOnly = false, quality = null) {
         audio_only: audioOnly,
         filename: requestedName,
         destination: $("destination").value,
-        account: $("quickAccount").value,
+        account: analyzedAccount, analysis_id: analysisId,
         quality: quality === null ? Number($("preferredQuality").value) : quality,
         force: $("forceDownload").checked,
         enqueue: true,

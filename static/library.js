@@ -58,6 +58,10 @@ async function boot() {
   $('destination').value=preferences.destination || 'library'; $('batchDestination').value=$('destination').value;
   $('preferredDestination').value=$('destination').value;
   $('preferredQuality').value=String(preferences.quality || 0); $('batchQuality').value=$('preferredQuality').value;
+  $('analysisAccount').value=preferences.account_mode || 'auto';
+  $('batchAccount').value=preferences.account_mode==='public'?'':preferences.account_mode==='youtube'?'youtube':'auto';
+  if(preferences.account_mode==='youtube')$('analysisAccount').value='auto';
+  await window.refreshAccountControls();
   window.showView('quick'); refreshHistory(true);
 }
 $('loginForm').addEventListener('submit',event=>{event.preventDefault();perform('loginMessage',async()=>{
@@ -147,24 +151,14 @@ for(const id of ['librarySearch','librarySort','libraryCollection','libraryWatch
 
 async function refreshSettings() {
   const auth=await window.api('/api/auth/status'); $('mfaState').textContent=auth.mfa_enabled?'Authenticator enabled.':'Authenticator not enabled.'; $('mfaForm').classList.toggle('hidden',auth.mfa_enabled);
-  const [storage,account]=await Promise.all([window.api('/api/storage'),window.api('/api/accounts')]);
+  const storage=await window.api('/api/storage');
   message('storageDashboard',`Library ${fmtSize(storage.library_bytes)} / ${fmtSize(storage.library_limit)} · Temporary ${fmtSize(storage.temporary_bytes)} / ${fmtSize(storage.temporary_limit)} · ${fmtSize(storage.free_bytes)} free · Queue ${storage.queue_paused?'paused':'running'}`);
-  const profiles=account.chrome_profiles || []; $('localBrowserConnection').classList.toggle('hidden',!profiles.length);
-  $('chromeProfile').replaceChildren(...profiles.map(profile=>{const option=document.createElement('option');option.value=profile;option.textContent=profile;return option;}));
-  const value=account.accounts[0]; message('accountState',`YouTube: ${value.status} · ${value.verified_channels?.length || 0} channels verified for membership import${value.expires_at?' · Earliest cookie expiry '+new Date(value.expires_at*1000).toLocaleDateString():''}`);
+  await window.refreshAccountControls();
 }
 $('savePreferences').addEventListener('click',()=>perform('settingsMessage',async()=>{
   await window.api('/api/settings',{method:'PUT',body:jsonBody({destination:$('preferredDestination').value,quality:Number($('preferredQuality').value)})});
   $('destination').value=$('preferredDestination').value; message('settingsMessage','Preferences saved on the server.');
 }));
-$('connectAccount').addEventListener('click',()=>perform('settingsMessage',async()=>{
-  const file=$('cookieFile').files[0]; if(!file || file.size>200000)throw new Error('Choose a scoped cookie file under 200 KB.');
-  if(!$('cookieConsent').checked)throw new Error('Confirm session ownership and authorized access.');
-  try { const cookies=await file.text(); await window.api('/api/accounts/youtube',{method:'POST',body:jsonBody({cookies,authorized:true})}); }
-  finally { $('cookieFile').value=''; $('cookieConsent').checked=false; }
-  message('settingsMessage','Session imported. Verify it with one accessible members-only download before scanning.'); refreshSettings();
-}));
-$('disconnectAccount').addEventListener('click',()=>perform('settingsMessage',async()=>{await window.api('/api/accounts/youtube',{method:'DELETE'});message('settingsMessage','Server session deleted.');refreshSettings();}));
 $('logout').addEventListener('click',()=>perform('settingsMessage',async()=>{closePlayer();await window.api('/api/auth/logout',{method:'POST'});showLogin();}));
 
 function renderMembers() {
@@ -211,9 +205,3 @@ $('mfaForm').addEventListener('submit',event=>{event.preventDefault();perform('m
   $('mfaPassword').value=''; $('mfaCode').value=''; $('mfaSecret').textContent=''; $('mfaEnrollment').classList.add('hidden');
   await boot(); message('loginMessage','MFA enabled. Sign in with password and a fresh authenticator code.');
 });});
-
-$('connectChrome').addEventListener('click',()=>perform('settingsMessage',async()=>{
-  await window.api('/api/accounts/youtube/browser',{method:'POST',body:jsonBody({profile:$('chromeProfile').value})});
-  message('settingsMessage','Chrome selected. Analyze one accessible video using YouTube connection to verify access.');
-  await refreshSettings();
-}));

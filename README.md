@@ -58,16 +58,20 @@ Always run exactly one Uvicorn worker. Run tests with synthetic sessions in thei
 
 ### Connect YouTube without exporting a cookie file
 
-1. In ordinary Chrome, sign into YouTube and confirm that the requested video plays. Enter credentials only on Google's login page.
-2. In the local app, open **Settings → Account connections**, choose the matching Chrome profile and select **Connect Chrome**. macOS may ask for Chrome Safe Storage access; enter any Mac password only in the native OS dialog.
-3. Under **Quick Download**, choose **Analyze with → YouTube connection**, enter one authorized video URL and select **Analyze**. Choose a quality and save to **Server library**.
+1. In ordinary Chrome, sign into YouTube and confirm that one members-only video you are authorized to watch plays. Enter credentials only on Google's login page.
+2. Open **Settings → Account connections → Connect YouTube once**. Select that Chrome profile, paste the single authorized test video and select **Verify and save connection**. macOS may ask for Chrome Safe Storage access; enter any Mac password only in the native OS dialog. The app saves the profile only after authenticated membership analysis succeeds.
+3. Return to **Quick Download**, leave account mode on **Automatic**, paste a URL and select **Analyze**. Choose a quality and save to **Server library**. Analysis and download use the same connection; changing it requires fresh analysis.
 4. Open **My Library → Play**, or explicitly download the completed file to your device.
+
+Normal use needs no profile selector, cookie file or consent checkbox. **Change or recheck connection** reveals setup only when needed. Only the selected profile is read; other profiles are never tested. Automatic uses the saved connection for HTTPS YouTube URLs and public extraction for unrelated providers. **Public** explicitly disables provider credentials and stays selected after refresh and restart. Preferences and connection metadata are stored on the server.
+
+Settings distinguishes a configured profile, a usable provider session and channel-specific membership evidence. Authenticated protected-video analysis confirms access; a completed members-only download supplies stronger evidence and enables the existing channel import gate. Membership evidence records the last successful check, not a permanent entitlement. Public-video success alone does not prove sign-in. Expired, missing or rejected sessions require rechecking; storage, format, rate-limit and channel eligibility failures do not automatically invalidate the connection.
 
 The app uses the official yt-dlp browser reader behind [`--cookies-from-browser`](https://github.com/yt-dlp/yt-dlp/wiki/FAQ#how-do-i-pass-cookies-to-yt-dlp). That reader briefly copies the selected Chrome cookie database into a private worker directory and decrypts it locally. The downloader retains only unexpired YouTube cookies in memory with an HTTPS-only policy. Temporary copies are removed on completion, cancellation, timeout and the next startup after an interrupted server. Connection metadata records a browser/profile selection, not session values. Disconnect removes the app connection; it does not sign out Chrome.
 
 The Codex in-app browser has no supported session-export interface. The Chrome connection is disabled on non-Mac servers and is not enabled by production Compose. A cloud server cannot automatically reuse your Mac's session.
 
-If a separate server needs authentication, the existing import accepts only a YouTube-only Netscape cookie file. Unrelated domains are rejected. Imported files belong in private configuration storage outside source control, with permission `0600`. Never combine browser reading with `--cookies FILE` to export an entire browser session. Imported sessions are not encrypted at rest by this app: protect the disk and backups. Disconnect unlinks an imported file; it does not guarantee physical erasure from SSDs or backups. Revoke the session with the provider when necessary.
+**Advanced Account Setup** is closed by default. Manual session-file import requires explicit ownership and access consent once, never for ordinary Chrome downloads. If a separate server needs authentication, the existing import accepts only a YouTube-only Netscape cookie file. Unrelated domains are rejected. Imported files belong in private configuration storage outside source control, with permission `0600`. Never combine browser reading with `--cookies FILE` to export an entire browser session. Imported sessions are not encrypted at rest by this app: protect the disk and backups. Disconnect unlinks an imported file; it does not guarantee physical erasure from SSDs or backups. Revoke the session with the provider when necessary.
 
 ## Architecture and storage
 
@@ -110,11 +114,13 @@ Defaults include one simultaneous download, a 100-job queue, a 1 GiB final-file 
 .venv/bin/python -m pytest -q
 ```
 
-Tests cover owner access/MFA, durable jobs and library behavior, cancellation, format handling, network restrictions, scoped browser sessions and cleanup. Cookie values and credentials in tests are synthetic fixtures; the TOTP vector is published in RFC 6238. FFmpeg/FFprobe are required. The final public source is tested separately from the running personal app, without reading real Chrome sessions or downloading media.
+Tests cover owner access/MFA, durable jobs and library behavior, cancellation, format handling, network restrictions, scoped browser sessions and cleanup, account preference persistence, provider scoping, connection verification, analysis/download consistency and session failure classification. Cookie values and credentials in tests are synthetic fixtures; the TOTP vector is published in RFC 6238. FFmpeg/FFprobe are required. The final public source is tested separately from the running personal app, without reading real Chrome sessions or downloading media.
 
 ## Deployment status
 
 Source publication is separate from deployment. No GitHub Pages, Oracle host or public application is configured by this repository's publication.
+
+[Server account connection design](deploy/ACCOUNT-CONNECTIONS.md) describes shared device access, credential storage and reauthorization, including controls that still need implementation before a cloud connection is provisioned. No Mac session is transferred automatically.
 
 [Caddy HTTPS deployment guidance](deploy/README-HTTPS.md) documents the staged production path. Compose binds the API to host loopback, requires owner MFA and HTTPS, uses separate private volumes and runs a non-root, read-only container. Configure the owner interactively with `manage.py`; do not pass passwords or authenticator secrets as command-line arguments. The older [Tailscale deployment guide](deploy/README-VPS.md) is an alternative and should not be mixed with the Caddy path.
 
