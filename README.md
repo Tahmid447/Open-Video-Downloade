@@ -71,7 +71,7 @@ The app uses the official yt-dlp browser reader behind [`--cookies-from-browser`
 
 The Codex in-app browser has no supported session-export interface. The Chrome connection is disabled on non-Mac servers and is not enabled by production Compose. A cloud server cannot automatically reuse your Mac's session.
 
-**Advanced Account Setup** is closed by default. Manual session-file import requires explicit ownership and access consent once, never for ordinary Chrome downloads. If a separate server needs authentication, the existing import accepts only a YouTube-only Netscape cookie file. Unrelated domains are rejected. Imported files belong in private configuration storage outside source control, with permission `0600`. Never combine browser reading with `--cookies FILE` to export an entire browser session. Imported sessions are not encrypted at rest by this app: protect the disk and backups. Disconnect unlinks an imported file; it does not guarantee physical erasure from SSDs or backups. Revoke the session with the provider when necessary.
+**Advanced Account Setup** is closed by default. Manual session-file import requires explicit ownership and access consent once, never for ordinary Chrome downloads. If a separate server needs authentication, the existing import accepts only a YouTube-only Netscape cookie file. Unrelated domains are rejected. Imported files belong in private configuration storage outside source control, with permission `0600`. Never combine browser reading with `--cookies FILE` to export an entire browser session. Production encrypts owner configuration and imported sessions with AES-256-GCM using a separate private key file. Replacement requires fresh owner password/MFA and verification of one members-only video before swapping the connection. See the cloud security and recovery guide. Disconnect unlinks an imported file; it does not guarantee physical erasure from SSDs or backups. Revoke the session with the provider when necessary.
 
 ## Architecture and storage
 
@@ -120,7 +120,7 @@ Tests cover owner access/MFA, durable jobs and library behavior, cancellation, f
 
 Source publication is separate from deployment. No GitHub Pages, Oracle host or public application is configured by this repository's publication.
 
-[Server account connection design](deploy/ACCOUNT-CONNECTIONS.md) describes shared device access, credential storage and reauthorization, including controls that still need implementation before a cloud connection is provisioned. No Mac session is transferred automatically.
+[Server account connection design](deploy/ACCOUNT-CONNECTIONS.md) describes shared device access, credential storage and reauthorization, including implemented encryption, fresh reauthentication, verified replacement and tested backup/recovery controls. Actual server provisioning and provider transfer still require separate approval. No Mac session is transferred automatically.
 
 [Caddy HTTPS deployment guidance](deploy/README-HTTPS.md) documents the staged production path. Compose binds the API to host loopback, requires owner MFA and HTTPS, uses separate private volumes and runs a non-root, read-only container. Configure the owner interactively with `manage.py`; do not pass passwords or authenticator secrets as command-line arguments. The older [Tailscale deployment guide](deploy/README-VPS.md) is an alternative and should not be mixed with the Caddy path.
 

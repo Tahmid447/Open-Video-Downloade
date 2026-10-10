@@ -6,9 +6,16 @@
 !worker.py
 !network_guard.py
 !static/
-!static/**
+!static/app.js
+!static/accounts.js
+!static/library.js
+!static/style.css
+!static/manifest.webmanifest
+!static/apple-touch-icon.png
+!static/icon-192.png
+!static/icon-512.png
 !templates/
-!templates/**
+!templates/index.html
 !deploy/
 !deploy/healthcheck.sh
 !database.py
@@ -17,3 +24,5 @@
 !security.py
 !accounts.py
 !manage.py
+!vault.py
+!recovery.py

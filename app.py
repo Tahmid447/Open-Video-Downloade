@@ -27,6 +27,8 @@ from extraction import stable_key
 from media import probe
 import security
 import accounts
+import vault
+import recovery
 
 from common import MAX_FILESIZE, MEDIA_EXTENSIONS, _sanitize_stem, validate_remote_url
 
@@ -328,10 +330,16 @@ async def lifespan(_app):
     STOPPING = False
     global STORE, QUEUE_PAUSED
     ensure_storage()
+    if vault.encryption_required():
+        key=vault.read_key(forbidden=[CONFIG_DIR,STATE_DIR,LIBRARY_DIR,DOWNLOAD_DIR])
+        recovery.validate_secrets(CONFIG_DIR,key)
+        security.owner_config(CONFIG_DIR)
+    runtime_lock=recovery.lock_state(STATE_DIR)
     for session_area in CONFIG_DIR.glob('browser-read-*'):
         if session_area.is_dir() and not session_area.is_symlink():
             shutil.rmtree(session_area,ignore_errors=True)
     STORE = Store(STATE_DIR/'library.sqlite3')
+    accounts.cleanup_encrypted_generations(STORE,CONFIG_DIR)
     JOBS.clear()
     for job_id, job in STORE.all('job').items():
         job.update(job_id=job_id,leases=0,cancel_requested=False)
@@ -360,6 +368,7 @@ async def lifespan(_app):
         await asyncio.gather(*list(TASKS), cleanup, scheduler, return_exceptions=True)
         await asyncio.gather(*(stop_process(p) for p in list(PROCESSES)), return_exceptions=True)
         STORE.close(); STORE = None
+        runtime_lock.close()
 
 
 class LeasedFileResponse(FileResponse):
@@ -390,6 +399,11 @@ async def browser_protection(request: Request, call_next):
         origin = request.headers.get("origin")
         if request.headers.get("sec-fetch-site") == "cross-site" or (origin and (urlparse(origin).netloc != request.headers.get("host") or urlparse(origin).scheme != request.url.scheme)):
             return JSONResponse({"detail": "Cross-site requests are not allowed."}, status_code=403)
+    if request.url.path.startswith('/api/') and vault.encryption_required():
+        try:
+            vault.read_key(forbidden=[CONFIG_DIR,STATE_DIR,LIBRARY_DIR,DOWNLOAD_DIR]);security.owner_config(CONFIG_DIR)
+        except vault.VaultError:
+            return JSONResponse({'detail':'Server credential encryption unavailable. Restore the matching private key; plaintext fallback is disabled.'},status_code=503,headers={'Cache-Control':'no-store'})
     if request.url.path.startswith('/api/') and request.url.path not in {'/api/health','/api/auth/status','/api/auth/login','/api/auth/setup'}:
         if not STORE or not (security.local_development(request) or security.authenticated(request,STORE,CONFIG_DIR)):
             return JSONResponse({'detail':'Owner login required.'},status_code=401,headers={'Cache-Control':'no-store'})
@@ -617,7 +631,7 @@ def launch(job_id):
         payload=dict(job['payload'])
         payload.update(accounts.worker_credentials(payload['url'],payload.get('account',''),STORE,CONFIG_DIR))
     except (HTTPException,OSError,RuntimeError) as exc:
-        job.update(status='error',error=exc.detail if isinstance(exc,HTTPException) else 'Server storage is unavailable.',expires_at=time.time()+JOB_TTL_SECONDS)
+        job.update(status='error',error=exc.detail if isinstance(exc,HTTPException) else str(exc) if isinstance(exc,vault.VaultError) else 'Server storage is unavailable.',expires_at=time.time()+JOB_TTL_SECONDS)
         persist_job(job); shutil.rmtree(job['job_dir'],ignore_errors=True)
         return
     job.update(status='preparing'); persist_job(job)
@@ -917,9 +931,21 @@ async def save_settings(payload: Preferences):
     STORE.put('settings','owner',value); return value
 
 
+class ReauthenticationPayload(BaseModel):
+    password: str = Field(min_length=1,max_length=256)
+    code: str = Field(default='',max_length=6)
+    action: Literal['youtube-replace','youtube-disconnect']
+
+
+@app.post('/api/auth/reauth')
+async def account_reauthentication(payload: ReauthenticationPayload,request: Request):
+    return await security.reauthenticate(request,payload.password,payload.code,payload.action,STORE,CONFIG_DIR)
+
+
 class CookiePayload(BaseModel):
     cookies: str = Field(min_length=1,max_length=200000)
     authorized: bool
+    test_url: HttpUrl
 
 
 @app.get('/api/accounts')
@@ -938,43 +964,57 @@ class BrowserVerificationPayload(BaseModel):
     url: HttpUrl
 
 
+def account_activity_idle():
+    if ANALYSIS_BUSY or any(j['status'] not in TERMINAL and j.get('payload',{}).get('account')=='youtube' for j in JOBS.values()):
+        raise HTTPException(409,'Wait for account jobs and analysis before changing a connection.')
+
+
+def still_authorized(request,owner_session):
+    if not security.authenticated(request,STORE,CONFIG_DIR) or security.session_key(request.cookies.get('ovd_session',''),CONFIG_DIR)!=owner_session:
+        raise HTTPException(401,'Owner authorization changed during verification. Your saved connection was kept.')
+
+
 @app.post('/api/accounts/youtube/browser/verify')
 async def verify_browser_connection(payload: BrowserVerificationPayload,request: Request):
     global ANALYSIS_BUSY
     if not security.loopback_setup(request):raise HTTPException(403,'Use the local Mac app on 127.0.0.1:8001.')
-    if ANALYSIS_BUSY or any(j['status'] not in TERMINAL and j.get('payload',{}).get('account')=='youtube' for j in JOBS.values()):
-        raise HTTPException(409,'Wait for account activity before verifying a connection.')
-    url=await checked_url(str(payload.url))
-    parsed=urlparse(url)
-    from urllib.parse import parse_qs
-    video_id=parse_qs(parsed.query).get('v',[''])[0] if parsed.path=='/watch' else parsed.path.strip('/').split('/')[-1]
-    if not accounts.youtube_url(url) or parsed.scheme!='https' or not re.fullmatch(r'[A-Za-z0-9_-]{11}',video_id) or not (parsed.path=='/watch' or parsed.hostname=='youtu.be' or parsed.path.startswith(('/shorts/','/live/'))):
-        raise HTTPException(400,'Provide one HTTPS YouTube video you can already watch, not a channel or playlist.')
-    if (CONFIG_DIR/'youtube.cookies.txt').exists():raise HTTPException(409,'Disconnect the imported session before selecting Chrome.')
-    candidate=accounts.chrome_connection(payload.profile)
-    previous=STORE.get('account','youtube')
+    account_activity_idle();accounts.one_video_url(str(payload.url))
+    candidate=accounts.chrome_connection(payload.profile);previous=STORE.get('account','youtube')
+    if previous and previous.get('source')!='browser':raise HTTPException(409,'Disconnect the imported session before selecting Chrome.')
+    security.consume_reauthentication(request,'youtube-replace',STORE,CONFIG_DIR)
+    owner_session=security.session_key(request.cookies.get('ovd_session',''),CONFIG_DIR)
     ANALYSIS_BUSY=True
     try:
+        url=await checked_url(str(payload.url))
         info=await track(asyncio.create_task(run_worker({'mode':'info','url':url,'account':'youtube','cookiebrowser':'chrome','cookieprofile':payload.profile},INFO_TIMEOUT_SECONDS)))
-        if info.get('availability')!='subscriber_only' or not info.get('channel_id') or not info.get('formats'):
-            raise HTTPException(422,'This video did not confirm membership access. Provide one members-only video you can already watch. Your saved connection was kept.')
-        if previous and previous.get('source')=='browser' and previous.get('profile')==payload.profile:
-            candidate=previous
-        STORE.put('account','youtube',candidate)
-        accounts.record_success(info,STORE)
+        accounts.confirmed_membership(info);still_authorized(request,owner_session)
+        if previous and previous.get('source')=='browser' and previous.get('profile')==payload.profile:candidate=previous
+        STORE.put('account','youtube',candidate);accounts.record_success(info,STORE)
         return {'account':accounts.account_status(STORE,CONFIG_DIR),'message':'YouTube session and membership access confirmed. This profile is saved for automatic reuse.'}
     except (RuntimeError,asyncio.TimeoutError) as exc:
         if previous and previous.get('source')=='browser' and previous.get('profile')==payload.profile:accounts.record_failure(str(exc),STORE)
-        raise HTTPException(422,str(exc) or 'Connection verification timed out. Your saved connection was kept.') from exc
+        raise HTTPException(422,str(exc) or 'Verification timed out. Your saved connection was kept.') from exc
     finally:ANALYSIS_BUSY=False
 
 
 @app.post('/api/accounts/youtube')
-async def connect_youtube(payload: CookiePayload):
-    if not payload.authorized: raise HTTPException(400,'Confirm that this session is yours and you have access.')
-    if any(j['status'] not in TERMINAL and j.get('payload',{}).get('account')=='youtube' for j in JOBS.values()) or ANALYSIS_BUSY:
-        raise HTTPException(409,'Wait for account jobs and analysis to finish before replacing a session.')
-    return accounts.import_cookies(payload.cookies,CONFIG_DIR,STORE)
+async def connect_youtube(payload: CookiePayload,request: Request):
+    global ANALYSIS_BUSY
+    if not payload.authorized:raise HTTPException(400,'Confirm that this session is yours and you have access.')
+    account_activity_idle();accounts.one_video_url(str(payload.test_url))
+    vault.read_key(forbidden=[CONFIG_DIR,STATE_DIR,LIBRARY_DIR,DOWNLOAD_DIR]);text,_=accounts.parse_cookies(payload.cookies)
+    security.consume_reauthentication(request,'youtube-replace',STORE,CONFIG_DIR)
+    owner_session=security.session_key(request.cookies.get('ovd_session',''),CONFIG_DIR)
+    ANALYSIS_BUSY=True
+    try:
+        url=await checked_url(str(payload.test_url))
+        info=await track(asyncio.create_task(run_worker({'mode':'info','url':url,'account':'youtube','cookie_text':text},INFO_TIMEOUT_SECONDS)))
+        accounts.confirmed_membership(info);still_authorized(request,owner_session)
+        value=accounts.import_cookies(text,CONFIG_DIR,STORE,info)
+        return {'account':value,'message':'Authorized session verified and encrypted on this server. Automatic mode can reuse it.'}
+    except (RuntimeError,asyncio.TimeoutError) as exc:
+        raise HTTPException(422,str(exc) or 'Verification timed out. Your saved connection was kept.') from exc
+    finally:ANALYSIS_BUSY=False
 
 
 class BrowserConnectionPayload(BaseModel):
@@ -985,19 +1025,16 @@ class BrowserConnectionPayload(BaseModel):
 async def connect_local_browser(payload: BrowserConnectionPayload, request: Request):
     if not security.loopback_setup(request):
         raise HTTPException(403,'Use the local Mac preview on 127.0.0.1:8001.')
-    if ANALYSIS_BUSY or any(j['status'] not in TERMINAL and j.get('payload',{}).get('account')=='youtube' for j in JOBS.values()):
-        raise HTTPException(409,'Wait for account activity before changing the connection.')
-    if (CONFIG_DIR/'youtube.cookies.txt').exists():
-        raise HTTPException(409,'Disconnect the imported session before selecting Chrome.')
-    return accounts.connect_chrome(payload.profile,STORE)
-
+    raise HTTPException(410,'Use verified connection setup with a fresh account-change authorization.')
 
 @app.delete('/api/accounts/youtube')
-async def disconnect_youtube():
+async def disconnect_youtube(request: Request):
     if any(j['status'] not in TERMINAL and j.get('payload',{}).get('account')=='youtube' for j in JOBS.values()) or ANALYSIS_BUSY:
         raise HTTPException(409,'Cancel account jobs and wait for analysis before disconnecting.')
-    (CONFIG_DIR/'youtube.cookies.txt').unlink(missing_ok=True)
+    security.consume_reauthentication(request,'youtube-disconnect',STORE,CONFIG_DIR)
+    record=STORE.get('account','youtube') or {}
     STORE.delete('account','youtube')
+    if record.get('source')!='browser':accounts.credential_file(record,CONFIG_DIR).unlink(missing_ok=True)
     return {'ok':True}
 
 

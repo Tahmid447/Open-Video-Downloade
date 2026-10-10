@@ -10,10 +10,21 @@ ARCHIVE="$(mktemp -t ovd-upload.XXXXXX)"
 REMOTE="/tmp/ovd-upload-$(date -u +%Y%m%dT%H%M%SZ)-$RANDOM"
 trap 'rm -f "$ARCHIVE"' EXIT
 # No .venv, media, logs, LaunchAgent or local environment/secrets are transferred.
-files=(app.py common.py worker.py network_guard.py database.py extraction.py media.py security.py accounts.py manage.py requirements.txt Dockerfile .dockerignore static templates
+files=(app.py common.py worker.py network_guard.py database.py extraction.py media.py security.py accounts.py manage.py vault.py recovery.py requirements.txt Dockerfile .dockerignore static templates
        deploy/docker-compose.yml deploy/.env.example deploy/healthcheck.sh deploy/service.sh deploy/Caddyfile.example deploy/enable-https.sh deploy/README-HTTPS.md
-       deploy/install-https-base.sh deploy/apply-https-release.sh deploy/egress-firewall.sh deploy/verify-https-private.sh deploy/README-VPS.md)
-tar -czf "$ARCHIVE" -C "$ROOT" "${files[@]}"
+       deploy/prepare-cloud-storage.sh deploy/install-https-base.sh deploy/apply-https-release.sh deploy/egress-firewall.sh deploy/verify-https-private.sh deploy/README-VPS.md deploy/ACCOUNT-CONNECTIONS.md deploy/ORACLE-CHECKLIST.md)
+# Directory allowlisting alone could include ignored local files. Transfer reviewed,
+# committed files only; never recursively walk a runtime or asset directory.
+if ! git -C "$ROOT" diff --quiet || ! git -C "$ROOT" diff --cached --quiet; then
+  echo 'Commit reviewed source changes before deployment.' >&2; exit 2
+fi
+tracked=()
+while IFS= read -r -d '' file; do
+  [ -f "$ROOT/$file" ] && [ ! -L "$ROOT/$file" ] || { echo 'Refusing missing/symlinked source.' >&2; exit 2; }
+  tracked+=("$file")
+done < <(git -C "$ROOT" ls-files -z -- "${files[@]}")
+[ "${#tracked[@]}" -gt 20 ] || { echo 'Incomplete reviewed Git source.' >&2; exit 2; }
+tar -czf "$ARCHIVE" -C "$ROOT" "${tracked[@]}"
 ssh -o BatchMode=yes -o ConnectTimeout=10 "$SERVER" "umask 077; mkdir '$REMOTE'"
 scp -o BatchMode=yes -o ConnectTimeout=10 "$ARCHIVE" "$SERVER:$REMOTE/source.tar.gz"
 ssh -o BatchMode=yes "$SERVER" "tar -xzf '$REMOTE/source.tar.gz' -C '$REMOTE'; rm '$REMOTE/source.tar.gz'"

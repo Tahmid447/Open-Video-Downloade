@@ -104,7 +104,7 @@ def test_non_auth_failures_do_not_force_reauthorization(client,monkeypatch,tmp_p
 
 
 def test_verify_only_selected_profile_and_keep_saved_connection_on_failure(client,monkeypatch,tmp_path):
-    record=chrome(client,monkeypatch,tmp_path);monkeypatch.setattr(service.security,'loopback_setup',lambda request:True)
+    record=chrome(client,monkeypatch,tmp_path);monkeypatch.setattr(service.security,'loopback_setup',lambda request:True);monkeypatch.setattr(service.security,'consume_reauthentication',lambda *args:None);monkeypatch.setattr(service,'still_authorized',lambda *args:None)
     calls=[]
     async def info(payload,timeout,job=None):calls.append(payload);return {'availability':'public','formats':[{'format_id':'18'}]}
     monkeypatch.setattr(service,'run_worker',info)
@@ -127,7 +127,7 @@ def test_verify_only_selected_profile_and_keep_saved_connection_on_failure(clien
 def test_recheck_preserves_download_evidence_and_public_preference(client,monkeypatch,tmp_path):
     record=chrome(client,monkeypatch,tmp_path);accounts.verified_download(member_info(),service.STORE)
     client.put('/api/settings',json={'account_mode':'public'})
-    monkeypatch.setattr(service.security,'loopback_setup',lambda request:True)
+    monkeypatch.setattr(service.security,'loopback_setup',lambda request:True);monkeypatch.setattr(service.security,'consume_reauthentication',lambda *args:None);monkeypatch.setattr(service,'still_authorized',lambda *args:None)
     async def info(payload,timeout,job=None):return member_info()
     monkeypatch.setattr(service,'run_worker',info)
     response=client.post('/api/accounts/youtube/browser/verify',json={'profile':'Default','url':URL})

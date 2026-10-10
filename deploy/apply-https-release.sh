@@ -10,11 +10,12 @@ flock -n 9 || { echo 'Another deployment is running.' >&2; exit 2; }
 if [ "${2:-}" = install ]; then
   "$STAGE/deploy/install-https-base.sh"
 fi
+"$STAGE/deploy/prepare-cloud-storage.sh"
 command -v docker >/dev/null && command -v caddy >/dev/null
 major="$(docker version --format '{{.Server.Version}}' | cut -d. -f1)"
 [ "$major" -ge 28 ] || { echo 'Docker Engine 28+ is required.' >&2; exit 2; }
 # Refuse an unexpected port or an already-enabled public sharing configuration.
-[ ! -f "$BASE/shared/.env" ] || ! grep -Eq '^(OVD_PORT|OVD_IMAGE|DOWNLOAD_DIR|LIBRARY_DIR|STATE_DIR|CONFIG_DIR|COOKIE_SECURE|OVD_ALLOW_UNAUTHENTICATED_LOCAL|LIBRARY_REQUIRE_MOUNT|OVD_LOCAL_SETUP|OVD_REQUIRE_MFA|OVD_REQUIRE_HTTPS|FORWARDED_ALLOW_IPS)=' "$BASE/shared/.env" || { echo 'Reserved settings in shared .env; remove them before deployment.' >&2; exit 2; }
+[ ! -f "$BASE/shared/.env" ] || ! grep -Eq '^(OVD_PORT|OVD_IMAGE|DOWNLOAD_DIR|LIBRARY_DIR|STATE_DIR|CONFIG_DIR|COOKIE_SECURE|OVD_ALLOW_UNAUTHENTICATED_LOCAL|LIBRARY_REQUIRE_MOUNT|OVD_LOCAL_SETUP|OVD_REQUIRE_MFA|OVD_REQUIRE_HTTPS|FORWARDED_ALLOW_IPS|OVD_LOCAL_BROWSER|OVD_REQUIRE_ENCRYPTION|OVD_CREDENTIAL_KEY_FILE)=' "$BASE/shared/.env" || { echo 'Reserved settings in shared .env; remove them before deployment.' >&2; exit 2; }
 release_id="$(date -u +%Y%m%dT%H%M%SZ)-$RANDOM"
 RELEASE="$BASE/releases/$release_id"
 cp -R "$STAGE" "$RELEASE"
@@ -81,11 +82,13 @@ cat > /etc/systemd/system/open-video-downloader.service <<'EOF'
 [Unit]
 Description=Private Open Video Downloader
 Requires=docker.service
+RequiresMountsFor=/srv/ovd-data
 After=docker.service network-online.target
 Wants=network-online.target
 [Service]
 Type=oneshot
 RemainAfterExit=yes
+ExecStartPre=/opt/open-video-downloader/current/deploy/prepare-cloud-storage.sh
 ExecStart=/opt/open-video-downloader/current/deploy/service.sh start
 ExecStop=/opt/open-video-downloader/current/deploy/service.sh stop
 TimeoutStartSec=120

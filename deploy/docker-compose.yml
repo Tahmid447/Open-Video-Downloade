@@ -1,6 +1,7 @@
 name: open-video-downloader
 services:
   downloader:
+    platform: linux/arm64
     image: ${OVD_IMAGE:-open-video-downloader:local}
     build:
       context: ..
@@ -22,6 +23,9 @@ services:
       OVD_LOCAL_SETUP: '0'
       OVD_REQUIRE_MFA: '1'
       OVD_REQUIRE_HTTPS: '1'
+      OVD_LOCAL_BROWSER: '0'
+      OVD_REQUIRE_ENCRYPTION: '1'
+      OVD_CREDENTIAL_KEY_FILE: /run/ovd-keys/master.key
       OVD_ALLOWED_HOSTS: ${OVD_ALLOWED_HOSTS:-127.0.0.1,localhost}
       FORWARDED_ALLOW_IPS: '172.30.80.1'
     volumes:
@@ -29,11 +33,19 @@ services:
       - library:/data/library
       - state:/data/state
       - config:/data/config
+      - type: bind
+        source: /etc/open-video-downloader/keys/provider
+        target: /run/ovd-keys
+        read_only: true
+        bind:
+          create_host_path: false
     tmpfs:
       - /tmp:size=128m,mode=1777
     read_only: true
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
+    ulimits:
+      core: 0
     pids_limit: 128
     mem_limit: ${OVD_MEMORY_LIMIT:-768m}
     cpus: ${OVD_CPUS:-1.5}
@@ -47,6 +59,11 @@ services:
 volumes:
   media:
   library:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /srv/ovd-data/library
   state:
   config:
 networks:

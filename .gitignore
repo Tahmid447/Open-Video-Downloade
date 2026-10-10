@@ -68,3 +68,9 @@ SHA256SUMS
 *.tar.gz
 *.tgz
 *.git.bundle
+
+# Encrypted credential generations, key files and private recovery archives.
+*.enc
+*.ovdbak
+*.keyring
+.ovd-keys/

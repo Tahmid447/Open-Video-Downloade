@@ -1,5 +1,6 @@
 """Short-lived yt-dlp worker; stdout is bounded JSON events, never console logs."""
 import json
+import io
 from http.cookiejar import DefaultCookiePolicy
 from urllib.parse import urlparse
 from pathlib import Path
@@ -82,6 +83,15 @@ def execute(payload):
     resource.setrlimit(resource.RLIMIT_FSIZE, (MAX_FILESIZE, MAX_FILESIZE))
     opts = ydl_base_opts() | {"logger": QuietLogger()}
     memory_session=browser_session(payload) if payload.get("cookiebrowser") else None
+    if payload.get('cookie_text'):
+        from accounts import parse_cookies
+        text,_=parse_cookies(payload.pop('cookie_text'))
+        memory_session=YoutubeDLCookieJar()
+        # parse_cookies already rejects/filters expired entries. yt-dlp must load
+        # expires=0 first, then normalize it to a session cookie (expires=None).
+        memory_session.load(io.StringIO(text),ignore_discard=True,ignore_expires=True)
+        memory_session.filename=None;memory_session.set_policy(SecureSessionPolicy())
+        del text
     def new_ydl(options):
         ydl = yt_dlp.YoutubeDL(options)
         if memory_session is not None:
@@ -187,10 +197,11 @@ def execute(payload):
 if __name__ == "__main__":
     try:
         payload=json.loads(sys.stdin.readline())
+        authenticated_source=bool(payload.get("cookiebrowser") or payload.get("cookiefile") or payload.get("cookie_text"))
         execute(payload)
     except Exception as exc:
         if isinstance(exc, yt_dlp.utils.DownloadError):
-            message = source_failure(exc,authenticated=bool(locals().get('payload',{}).get('cookiebrowser') or locals().get('payload',{}).get('cookiefile')))
+            message = source_failure(exc,authenticated=locals().get('authenticated_source',False))
         elif isinstance(exc, OSError) and exc.errno == 28:
             message = "Insufficient server storage."
         elif isinstance(exc, OSError) and exc.errno == 27:

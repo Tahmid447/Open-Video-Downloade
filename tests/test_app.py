@@ -19,6 +19,10 @@ import common
 
 @pytest.fixture
 def client(monkeypatch, tmp_path):
+    import vault
+    key=tmp_path/'keys/master.key';vault.initialize_key(key)
+    monkeypatch.setenv('OVD_CREDENTIAL_KEY_FILE',str(key))
+    monkeypatch.setenv('OVD_REQUIRE_ENCRYPTION','1')
     monkeypatch.setattr(service,'STATE_DIR',tmp_path/'state')
     monkeypatch.setattr(service,'CONFIG_DIR',tmp_path/'config')
     monkeypatch.setattr(service,'LIBRARY_DIR',tmp_path/'library')
@@ -106,6 +110,9 @@ def test_limit_concurrency_and_cancel_cleanup(client):
 
 
 def process_is_live(pid):
+    if sys.platform=='linux':
+        try:return Path(f'/proc/{pid}/stat').read_text().rsplit(')',1)[1].split()[0]!='Z'
+        except FileNotFoundError:return False
     result=subprocess.run(['ps','-p',str(pid),'-o','stat='],capture_output=True,text=True)
     return bool(result.stdout.strip()) and not result.stdout.strip().startswith('Z')
 

@@ -7,6 +7,7 @@ import time
 import uuid
 from urllib.parse import urlparse
 from fastapi import HTTPException
+import vault
 
 
 def youtube_url(url):
@@ -14,7 +15,7 @@ def youtube_url(url):
     return host in {'youtube.com','www.youtube.com','m.youtube.com','youtu.be'}
 
 
-def import_cookies(text, config, store):
+def parse_cookies(text):
     if len(text.encode()) > 200000 or not text.startswith(('# Netscape HTTP Cookie File','# HTTP Cookie File')):
         raise HTTPException(400, 'Use a Netscape cookie file containing only youtube.com cookies.')
     count = 0; expiry = []; session_cookie = False; normalized = ['# Netscape HTTP Cookie File']
@@ -40,18 +41,35 @@ def import_cookies(text, config, store):
         normalized.append(line); count += 1
     if not count:
         raise HTTPException(400, 'No unexpired cookies were supplied.')
-    target = Path(config)/'youtube.cookies.txt'
-    temporary = target.with_suffix('.new')
-    fd = os.open(temporary, os.O_WRONLY|os.O_CREAT|os.O_TRUNC|os.O_NOFOLLOW, 0o600)
-    with os.fdopen(fd,'w') as f:
-        f.write('\n'.join(normalized)+'\n')
-        f.flush(); os.fsync(f.fileno())
-    os.replace(temporary,target)
-    record = dict(provider='youtube', status='unverified', imported_at=time.time(),
-                  expires_at=max(expiry) if expiry and not session_cookie else None, verified_channels=[],
-                  connection_id=uuid.uuid4().hex,session_state='unknown')
-    store.put('account','youtube',record)
-    return record
+    return '\n'.join(normalized)+'\n', max(expiry) if expiry and not session_cookie else None
+
+
+def credential_file(record,config):
+    if record.get('source')=='encrypted':
+        identity=record.get('connection_id','')
+        if not re.fullmatch(r'[a-f0-9]{32}',identity):raise vault.VaultError('Invalid encrypted connection identity.')
+        return Path(config)/('youtube-'+identity+'.enc')
+    return Path(config)/'youtube.cookies.txt'
+
+
+def import_cookies(text, config, store, info=None):
+    normalized,expires=parse_cookies(text)
+    key=vault.read_key(forbidden=[config,store.path.parent])
+    record=dict(provider='youtube',source='encrypted',status='unverified',imported_at=time.time(),
+                expires_at=expires,verified_channels=[],connection_id=uuid.uuid4().hex,session_state='unknown')
+    if info:
+        record.update(status='connected',session_state='usable',session_verified_at=time.time(),last_checked_at=time.time(),
+            membership_checks={info['channel_id']:{'channel':info.get('uploader') or info['channel_id'],'checked_at':time.time(),'evidence':'analysis'}})
+    target=credential_file(record,config);previous=store.get('account','youtube')
+    vault.atomic_write(target,vault.seal(normalized.encode(),'youtube:'+record['connection_id'],key))
+    try:
+        store.put('account','youtube',record)
+    except BaseException:
+        target.unlink(missing_ok=True);raise
+    if previous and previous.get('source')!='browser':
+        try:credential_file(previous,config).unlink(missing_ok=True)
+        except OSError:pass  # Startup cleans orphaned encrypted generations; the new pointer is committed.
+    return account_status(store,config)
 
 
 AUTH_COOKIE_NAMES = {'SID','SAPISID','__Secure-1PSID','__Secure-3PSID','__Secure-1PAPISID','__Secure-3PAPISID'}
@@ -71,7 +89,7 @@ def account_status(store, config):
     configured=bool(stored)
     if record.get('source')=='browser':
         if not local_chrome_available():state='unavailable'
-    elif not (Path(config)/'youtube.cookies.txt').is_file():
+    elif not credential_file(record,config).is_file():
         state='missing'
     elif record.get('expires_at') and record['expires_at']<=time.time():
         state='expired'
@@ -113,7 +131,8 @@ def cookie_path(url, account, store, config):
     resolve_account(url,'youtube',store,config)
     status=account_status(store,config)
     if status.get('source')=='browser':return None
-    path=Path(config)/'youtube.cookies.txt'
+    path=credential_file(status,config)
+    if vault.encryption_required() and status.get('source')!='encrypted':raise HTTPException(503,'Legacy plaintext provider session requires explicit offline migration.')
     if path.is_symlink() or path.stat().st_mode & 0o077:
         raise HTTPException(503,'Account secret permissions are invalid.')
     return str(path)
@@ -169,6 +188,9 @@ def worker_credentials(url, account, store, config):
     record=account_status(store,config) if account else {}
     if record.get('source')=='browser':
         return {'cookiebrowser':'chrome','cookieprofile':record['profile']}
+    if record.get('source')=='encrypted':
+        text=vault.unseal(Path(path).read_bytes(),'youtube:'+record['connection_id'],vault.read_key(forbidden=[config,store.path.parent])).decode()
+        return {'cookie_text':text}
     return {'cookiefile':path}
 
 
@@ -192,3 +214,24 @@ def chrome_profiles():
     directory=Path.home()/'Library/Application Support/Google/Chrome'
     if not directory.is_dir():return []
     return sorted(p.name for p in directory.iterdir() if p.is_dir() and re.fullmatch(r'Default|Profile [0-9]+',p.name))
+
+
+def one_video_url(url):
+    from urllib.parse import parse_qs
+    parsed=urlparse(url)
+    video_id=parse_qs(parsed.query).get('v',[''])[0] if parsed.path=='/watch' else parsed.path.strip('/').split('/')[-1]
+    if not youtube_url(url) or parsed.scheme!='https' or not re.fullmatch(r'[A-Za-z0-9_-]{11}',video_id) or not (parsed.path=='/watch' or parsed.hostname=='youtu.be' or parsed.path.startswith(('/shorts/','/live/'))):
+        raise HTTPException(400,'Provide one HTTPS YouTube video you can already watch, not a channel or playlist.')
+    return url
+
+
+def confirmed_membership(info):
+    if info.get('availability')!='subscriber_only' or not info.get('channel_id') or not info.get('formats'):
+        raise HTTPException(422,'This video did not confirm membership access. Your saved connection was kept.')
+
+
+def cleanup_encrypted_generations(store,config):
+    record=store.get('account','youtube') or {}
+    active=credential_file(record,config) if record.get('source')=='encrypted' else None
+    for path in Path(config).glob('youtube-*.enc'):
+        if re.fullmatch(r'youtube-[a-f0-9]{32}\.enc',path.name) and path!=active and not path.is_symlink():path.unlink()

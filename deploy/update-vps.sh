@@ -10,7 +10,7 @@ ARCHIVE="$(mktemp -t ovd-upload.XXXXXX)"
 REMOTE="/tmp/ovd-upload-$(date -u +%Y%m%dT%H%M%SZ)-$RANDOM"
 trap 'rm -f "$ARCHIVE"' EXIT
 # No .venv, media, logs, LaunchAgent or local environment/secrets are transferred.
-files=(app.py common.py worker.py network_guard.py database.py extraction.py media.py security.py accounts.py manage.py requirements.txt Dockerfile .dockerignore static templates
+files=(app.py common.py worker.py network_guard.py database.py extraction.py media.py security.py accounts.py manage.py vault.py recovery.py requirements.txt Dockerfile .dockerignore static templates
        deploy/docker-compose.yml deploy/.env.example deploy/healthcheck.sh deploy/service.sh
        deploy/install-vps.sh deploy/apply-release.sh deploy/egress-firewall.sh deploy/verify-vps.sh deploy/README-VPS.md)
 tar -czf "$ARCHIVE" -C "$ROOT" "${files[@]}"

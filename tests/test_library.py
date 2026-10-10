@@ -107,7 +107,10 @@ def test_restart_recovers_interrupted_and_atomic_save(client):
     id='a'*32; directory=service.DOWNLOAD_DIR/id;directory.mkdir()
     service.STORE.put('job',id,{'job_id':id,'status':'downloading','created_at':time.time(),'job_dir':str(directory),'requested_name':'Interrupted','media_key':'url:x','payload':{'url':'https://example.com/x'}})
     # Exercise a complete server lifespan with the same isolated volumes.
-    service.STORE.backup(service.STATE_DIR/'snapshot.sqlite3')
+    original_state=service.STATE_DIR
+    reopened_state=original_state.parent/'reopened-state';reopened_state.mkdir()
+    service.STORE.backup(reopened_state/'library.sqlite3')
+    service.STATE_DIR=reopened_state
     async def reopened():
         original=service.STORE
         # Current fixture has no running jobs; use separate SQLite connection.
@@ -116,12 +119,13 @@ def test_restart_recovers_interrupted_and_atomic_save(client):
             assert service.STORE.get('job',id)['status']=='interrupted'
         service.STORE=original
     asyncio.run(reopened())
+    service.STATE_DIR=original_state
 
 
 def test_owner_login_protects_media_and_sessions(client,monkeypatch):
     monkeypatch.setattr(service.security,'local_development',lambda request:False)
     monkeypatch.setenv('COOKIE_SECURE','0')
-    (service.CONFIG_DIR/'owner.json').write_text(json.dumps({'password_hash':password_hash('example-owner-password')}));os.chmod(service.CONFIG_DIR/'owner.json',0o600)
+    service.security.write_owner(service.CONFIG_DIR,{'password_hash':password_hash('example-owner-password')})
     service.security.ATTEMPTS.clear()
     assert client.get('/api/library').status_code==401
     assert client.get('/api/library/'+'a'*32+'/file').status_code==401
@@ -137,13 +141,19 @@ def test_owner_login_protects_media_and_sessions(client,monkeypatch):
     assert client.post('/api/auth/login',content='x'*300000).status_code==413
 
 
-def test_cookie_scope_permissions_gating_and_disconnect(client):
+def test_cookie_scope_permissions_gating_and_disconnect(client,monkeypatch):
+    import accounts
+    monkeypatch.setattr(service.security,'consume_reauthentication',lambda *args:None);monkeypatch.setattr(service,'still_authorized',lambda *args:None)
     good='# Netscape HTTP Cookie File\n.youtube.com\tTRUE\t/\tTRUE\t0\tSESSION\tfixture-secret\n'
-    assert client.post('/api/accounts/youtube',json={'cookies':good.replace('youtube.com','example.com'),'authorized':True}).status_code==400
-    r=client.post('/api/accounts/youtube',json={'cookies':good,'authorized':True})
-    assert r.json()['status']=='unverified' and 'fixture-secret' not in r.text
-    path=service.CONFIG_DIR/'youtube.cookies.txt'
-    assert path.stat().st_mode & 0o777==0o600
+    async def info(*args):return {'availability':'subscriber_only','channel_id':'UCfixture','formats':[{'format_id':'18'}]}
+    monkeypatch.setattr(service,'run_worker',info)
+    body={'cookies':good,'authorized':True,'test_url':'https://www.youtube.com/watch?v=abcdefghijk'}
+    assert client.post('/api/accounts/youtube',json=body|{'cookies':good.replace('youtube.com','example.com')}).status_code==400
+    r=client.post('/api/accounts/youtube',json=body)
+    assert r.json()['account']['session_state']=='usable' and 'fixture-secret' not in r.text
+    path=accounts.credential_file(r.json()['account'],service.CONFIG_DIR)
+    assert path.stat().st_mode & 0o777==0o600 and b'fixture-secret' not in path.read_bytes()
+    assert not (service.CONFIG_DIR/'youtube.cookies.txt').exists()
     assert client.post('/api/info',json={'url':'https://example.com/x','account':'youtube'}).status_code==400
     assert client.post('/api/membership/scan',json={'url':'https://www.youtube.com/@channel/membership'}).status_code==409
     assert client.post('/api/membership/scan',json={'url':'https://www.youtube.com/@channel/videos'}).status_code==400
@@ -185,8 +195,9 @@ def test_schema_and_consistent_backup(tmp_path):
 def test_membership_manifest_dedupe_selection_and_public_exclusion(client):
     # Simulated verified account: deliberately not evidence of real subscription access.
     good='# Netscape HTTP Cookie File\n.youtube.com\tTRUE\t/\tTRUE\t0\tSESSION\tfixture\n'
-    client.post('/api/accounts/youtube',json={'cookies':good,'authorized':True})
-    service.STORE.put('account','youtube',{'status':'verified','verified_channels':['UC'+'a'*22]})
+    import accounts
+    accounts.import_cookies(good,service.CONFIG_DIR,service.STORE)
+    record=service.STORE.get('account','youtube');record.update(status='verified',verified_channels=['UC'+'a'*22]);service.STORE.put('account','youtube',record)
     entries={'youtube:abcdefghijk':{'media_key':'youtube:abcdefghijk','url':'https://www.youtube.com/watch?v=abcdefghijk','title':'Member','availability':'subscriber_only'},
              'youtube:publicabc12':{'media_key':'youtube:publicabc12','url':'https://www.youtube.com/watch?v=publicabc12','title':'Public','availability':'public'}}
     service.STORE.put('manifest','fixture',{'entries':entries,'source':'https://www.youtube.com/@fixture/membership','summary':{}})
@@ -204,10 +215,10 @@ def test_password_rotation_and_session_expiry(client,monkeypatch):
     monkeypatch.setattr(service.security,'local_development',lambda request:False)
     monkeypatch.setenv('COOKIE_SECURE','0')
     path=service.CONFIG_DIR/'owner.json'
-    path.write_text(json.dumps({'password_hash':password_hash('old-test-password')}));path.chmod(0o600)
+    service.security.write_owner(service.CONFIG_DIR,{'password_hash':password_hash('old-test-password')})
     service.security.ATTEMPTS.clear()
     assert client.post('/api/auth/login',json={'password':'old-test-password'}).status_code==200
-    path.write_text(json.dumps({'password_hash':password_hash('new-test-password')}))
+    service.security.write_owner(service.CONFIG_DIR,{'password_hash':password_hash('new-test-password')})
     assert client.get('/api/library').status_code==401
     assert client.post('/api/auth/login',json={'password':'new-test-password'}).status_code==200
     with service.STORE.db:service.STORE.db.execute('UPDATE sessions SET expires=0')

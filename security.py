@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 import secrets
 import time
+import vault
 from fastapi import HTTPException
 
 SESSION_SECONDS = 7 * 86400
@@ -28,7 +29,10 @@ def owner_config(config):
         return None
     if path.is_symlink() or path.stat().st_mode & 0o077:
         raise RuntimeError('Owner config must be a private regular file (0600).')
-    return json.loads(path.read_text())
+    raw=path.read_bytes()
+    if raw.startswith(b'OVDSEC1\n'):raw=vault.unseal(raw,'owner')
+    elif vault.encryption_required():raise vault.VaultError('Plaintext owner configuration is forbidden in encrypted server mode. Perform explicit offline migration.')
+    return json.loads(raw)
 
 
 def owner_hash(config):
@@ -39,15 +43,9 @@ def write_owner(config, data):
     directory = Path(config)
     directory.mkdir(mode=0o700, parents=True, exist_ok=True)
     target = directory/'owner.json'
-    temporary = directory/'owner.json.new'
-    fd = os.open(temporary, os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW, 0o600)
-    try:
-        with os.fdopen(fd, 'w') as stream:
-            json.dump(data, stream)
-            stream.flush(); os.fsync(stream.fileno())
-        os.replace(temporary, target)
-    finally:
-        temporary.unlink(missing_ok=True)
+    raw=json.dumps(data).encode()
+    if os.getenv('OVD_CREDENTIAL_KEY_FILE') or vault.encryption_required():raw=vault.seal(raw,'owner')
+    vault.atomic_write(target,raw)
 
 
 def totp(secret, counter):
@@ -166,3 +164,29 @@ class BodyLimit:
                 return {'type':'http.request','body':b''.join(chunks),'more_body':False}
             return await receive()
         await self.app(scope, replay, send)
+
+
+async def reauthenticate(request,password,code,action,store,config):
+    if not authenticated(request,store,config):raise HTTPException(401,'Owner login required.')
+    rate_limit(store);await check_password(password,config)
+    data=owner_config(config)
+    if os.getenv('OVD_REQUIRE_MFA')=='1' and not data.get('totp_secret'):
+        raise HTTPException(403,'Enroll owner MFA before changing account credentials.')
+    if data.get('totp_secret'):
+        if not verify_totp(data,code):raise HTTPException(401,'Incorrect password or fresh authentication code.')
+        write_owner(config,data)
+    grant=secrets.token_urlsafe(32);now=time.time()
+    for key,value in store.all('reauth').items():
+        if value['expires']<=now:store.delete('reauth',key)
+    store.put('reauth',hashlib.sha256(grant.encode()).hexdigest(),{'action':action,'session':session_key(request.cookies.get('ovd_session',''),config),'expires':now+300})
+    return {'grant':grant,'expires_in':300}
+
+
+def consume_reauthentication(request,action,store,config):
+    if not authenticated(request,store,config):raise HTTPException(401,'Owner login required.')
+    grant=request.headers.get('x-ovd-reauth','')
+    if len(grant)>200:raise HTTPException(403,'Authorize this account change with a fresh password/MFA check.')
+    key=hashlib.sha256(grant.encode()).hexdigest();value=store.get('reauth',key)
+    if not value or value['expires']<=time.time() or value['action']!=action or not hmac.compare_digest(value['session'],session_key(request.cookies.get('ovd_session',''),config)):
+        raise HTTPException(403,'Authorize this account change with a fresh password/MFA check.')
+    store.delete('reauth',key)  # Single-process server; no await between validation and consumption.

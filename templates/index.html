@@ -171,7 +171,8 @@
         <p id="connectionSetupMessage" role="status"></p>
       </div>
       <details id="advancedAccountSetup"><summary>Advanced Account Setup · manual session-file import</summary>
-        <p class="save-note">For an authorized connection on this server, import a YouTube-only Netscape session file once. It is stored privately. A Mac Chrome connection does not transfer to Linux or a VPS. Never supply your password or a whole browser profile. Protect the server disk and backups.</p>
+        <p class="save-note">For an authorized connection on this server, import a YouTube-only Netscape session file once. It is encrypted with a separately managed server key. Replacement is verified before your saved connection changes. A Mac Chrome connection does not transfer to Linux or a VPS. Never supply your password or a whole browser profile. Protect the server disk and backups.</p>
+        <label>Authorized members-only test video<input id="importTestUrl" type="url" placeholder="Paste one video you can already watch" autocomplete="off"/></label>
         <label>Session file<input id="cookieFile" type="file" accept=".txt"/></label>
         <label><input id="cookieConsent" type="checkbox"/> This is my session, and I have permission to access the media.</label>
         <button id="connectAccount" class="secondary">Import YouTube session</button>
@@ -191,8 +192,15 @@
       For public or authorized, non-DRM media. This build does not bypass DRM, paywalls, private accounts, or other access controls.
     </p>
   </main>
-  <script src="/static/app.js?v=6"></script>
-  <script src="/static/accounts.js?v=6"></script>
-  <script src="/static/library.js?v=6"></script>
+  <dialog id="reauthDialog"><form id="reauthForm">
+    <h2>Authorize account change</h2><p>Confirm your owner password and a fresh authenticator code. This authorizes one account change for five minutes; ordinary downloads need no confirmation.</p>
+    <label>Owner password<input id="reauthPassword" type="password" autocomplete="current-password" maxlength="256" required/></label>
+    <label id="reauthCodeLabel">Fresh authenticator code<input id="reauthCode" inputmode="numeric" autocomplete="one-time-code" maxlength="6" pattern="[0-9]{6}"/></label>
+    <div class="actions"><button type="submit" class="primary">Authorize this change</button><button id="cancelReauth" type="button" class="ghost">Cancel</button></div>
+    <p id="reauthMessage" role="alert"></p>
+  </form></dialog>
+  <script src="/static/app.js?v=7"></script>
+  <script src="/static/accounts.js?v=7"></script>
+  <script src="/static/library.js?v=7"></script>
 </body>
 </html>

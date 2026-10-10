@@ -11,11 +11,18 @@ CODE=r'''
 import json, pathlib, sys
 import worker
 payload=json.loads(sys.argv[1])
+expected_cookie_session=bool(payload.get('cookie_text'))
 class FakeYDL:
     def __init__(self,opts): self.opts=opts
     def __enter__(self): return self
     def __exit__(self,*args): return False
     def extract_info(self,url,download=False):
+        if expected_cookie_session:
+            import urllib.request
+            assert len(self.cookiejar)==1 and self.cookiejar.filename is None
+            for target,allowed in [('https://www.youtube.com/',True),('http://www.youtube.com/',False),('https://example.com/',False)]:
+                request=urllib.request.Request(target);self.cookiejar.add_cookie_header(request)
+                assert request.has_header('Cookie')==allowed
         if payload['mode']=='scan':
             return {'channel_id':payload.get('channel_id','UCfixture'),'entries':[
                 {'id':'abcdefghijk','availability':'subscriber_only','title':'Member'},
@@ -52,6 +59,14 @@ def test_real_worker_analysis():
     assert result.returncode==0,result.stderr
     data=json.loads(result.stdout)['data']
     assert data['suggested_filename']=='日本語 Movie' and data['formats'][0]['format_id']=='18'
+
+
+@pytest.mark.parametrize('session_expiry',[0,4102444800])
+def test_encrypted_session_worker_preserves_session_cookies_and_scope(session_expiry):
+    cookies=f'# Netscape HTTP Cookie File\n.youtube.com\tTRUE\t/\tTRUE\t{session_expiry}\tSID\tsynthetic-session\n.youtube.com\tTRUE\t/\tTRUE\t1\tPREF\texpired-fixture\n'
+    result=run({'mode':'info','url':'https://www.youtube.com/watch?v=abcdefghijk','cookie_text':cookies})
+    assert result.returncode==0,result.stderr
+    assert 'synthetic-session' not in result.stdout and 'expired-fixture' not in result.stdout
 
 
 @pytest.mark.parametrize('audio,format_id',[(False,''),(False,'18'),(True,'')])

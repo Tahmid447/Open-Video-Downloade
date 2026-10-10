@@ -1,4 +1,4 @@
-/* Account metadata only; provider secrets never enter this controller. */
+/* Provider credentials enter only the explicitly authorized import, never storage or diagnostics. */
 let savedYouTube = null;
 let accountModeSaving = null;
 function youtubeLink(value) {
@@ -60,7 +60,8 @@ $('connectChrome').addEventListener('click',()=>perform('connectionSetupMessage'
   $('connectChrome').disabled=true;
   try {
     $('connectionSetupMessage').textContent='Checking access to that one video…';
-    const result=await window.api('/api/accounts/youtube/browser/verify',{method:'POST',body:JSON.stringify({profile,url})});
+    const grant=await authorizeAccountChange('youtube-replace');
+    const result=await window.api('/api/accounts/youtube/browser/verify',{method:'POST',headers:{'X-OVD-Reauth':grant},body:JSON.stringify({profile,url})});
     $('localBrowserConnection').classList.add('hidden');$('connectionTestUrl').value='';
     // Preserve an explicit Public preference; connecting an account does not change it.
     invalidateAnalysis();await window.refreshAccountControls();$('settingsMessage').textContent=result.message;
@@ -69,12 +70,38 @@ $('connectChrome').addEventListener('click',()=>perform('connectionSetupMessage'
 $('connectAccount').addEventListener('click',()=>perform('settingsMessage',async()=>{
   const file=$('cookieFile').files[0];if(!file || file.size>200000)throw new Error('Choose a YouTube-only session file under 200 KB.');
   if(!$('cookieConsent').checked)throw new Error('Confirm session ownership and authorized access for this import.');
-  try {const cookies=await file.text();await window.api('/api/accounts/youtube',{method:'POST',body:JSON.stringify({cookies,authorized:true})});}
+  const test_url=$('importTestUrl').value.trim();if(!youtubeLink(test_url))throw new Error('Provide one authorized HTTPS YouTube members-only test video.');
+  try {const grant=await authorizeAccountChange('youtube-replace');const cookies=await file.text();await window.api('/api/accounts/youtube',{method:'POST',headers:{'X-OVD-Reauth':grant},body:JSON.stringify({cookies,authorized:true,test_url})});}
   finally {$('cookieFile').value='';$('cookieConsent').checked=false;}
   $('advancedAccountSetup').open=false;invalidateAnalysis();await window.refreshAccountControls();
-  $('settingsMessage').textContent='Session imported once. Analyze an authorized members-only video to verify access.';
+  $('importTestUrl').value='';$('settingsMessage').textContent='Session verified and encrypted on this server. Automatic mode can reuse it.';
 }));
 $('disconnectAccount').addEventListener('click',()=>perform('settingsMessage',async()=>{
-  await window.api('/api/accounts/youtube',{method:'DELETE'});invalidateAnalysis();await window.refreshAccountControls();
+  const grant=await authorizeAccountChange('youtube-disconnect');
+  await window.api('/api/accounts/youtube',{method:'DELETE',headers:{'X-OVD-Reauth':grant}});invalidateAnalysis();await window.refreshAccountControls();
   $('localBrowserConnection').classList.add('hidden');$('settingsMessage').textContent='App connection removed. Chrome remains signed in.';
 }));
+
+let reauthPending=null;
+async function authorizeAccountChange(action) {
+  if(reauthPending)throw new Error('Complete the current account authorization first.');
+  const auth=await window.api('/api/auth/status');
+  $('reauthCodeLabel').classList.toggle('hidden',!auth.mfa_enabled);$('reauthCode').required=auth.mfa_enabled;
+  $('reauthPassword').value='';$('reauthCode').value='';$('reauthMessage').textContent='';
+  return new Promise((resolve,reject)=>{reauthPending={action,resolve,reject};$('reauthDialog').showModal();});
+}
+function closeReauthentication(error=null,grant=null) {
+  const pending=reauthPending;reauthPending=null;
+  $('reauthPassword').value='';$('reauthCode').value='';$('reauthDialog').close();
+  if(pending){if(error)pending.reject(error);else pending.resolve(grant);}
+}
+$('cancelReauth').addEventListener('click',()=>closeReauthentication(new Error('Account change cancelled.')));
+$('reauthDialog').addEventListener('cancel',event=>{event.preventDefault();closeReauthentication(new Error('Account change cancelled.'));});
+$('reauthForm').addEventListener('submit',async event=>{
+  event.preventDefault();if(!reauthPending)return;
+  const password=$('reauthPassword').value,code=$('reauthCode').value,action=reauthPending.action;
+  $('reauthPassword').value='';$('reauthCode').value='';
+  const button=$('reauthForm').querySelector('button[type="submit"]');button.disabled=true;
+  try {const result=await window.api('/api/auth/reauth',{method:'POST',body:JSON.stringify({password,code,action})});closeReauthentication(null,result.grant);}
+  catch(error){$('reauthMessage').textContent=error.message;}finally{button.disabled=false;}
+});
