@@ -129,3 +129,25 @@ Before Oracle deployment, verify capacity/cost eligibility, storage mounts and b
 ## License
 
 No license has been selected yet. Publishing the source does not grant an open-source license; a licensing decision remains pending.
+
+<!-- BEGIN MAINTENANCE CONTINUITY 2026-10-11 -->
+
+## Continuity audit — 2026-10-11
+
+FastAPI/Python3.12 container, pinned yt-dlp requirements, FFmpeg/FFprobe, Deno, single Uvicorn worker and durable SQLite/private media. Read deploy/ACCOUNT-CONNECTIONS.md, deploy/README-HTTPS.md and deploy/ORACLE-CHECKLIST.md.
+
+Source at731a8f6 implements encrypted credentials, fresh MFA reauthentication and tested encrypted backup/recovery. Local services are used by another chat: do not stop them. The dated Oracle status report records Tokyo A1 OUT_OF_HOST_CAPACITY and no VM launch/resource creation; a source checkpoint does not create a deployment.
+
+Observed source branch `feature/secure-cloud`, HEAD `731a8f605dbdb977a380d628677b96c357e714cb`; 0 working-tree entries before this documentation update. This section is a documentation change; it does not mark a new application release or verify production.
+
+Remote audit: Tahmid447/Open-Video-Downloade — VERIFIED. Source/WIP/private assets are selected private local checkpoints with explicit manifest omissions. Same-disk read-back is not independent backup. No project has passed complete source + private data + assets + account recovery on a separate Mac/SSD.
+
+Preserve DOWNLOAD_DIR staging only according to app rules; LIBRARY_DIR media, STATE_DIR consistent SQLite and CONFIG_DIR encrypted configuration are unique state. Matching master key and independent backup key must be retained separately. Mac Chrome connection cannot be transported to Linux by cloning. No real cookies, credentials, runtime DB, private reports or media belong in Git. Older downloader variants and the dirty development/analysis-batch-library checkout are distinct work.
+
+Next recovery action: Verify exact recovery branch/SHA, read the dated Oracle status in the private pack and retain the local app. Cloud provisioning/provider transfer require their own active task authorization; do not create resources, expose a server or transfer sessions from a recovery prompt.
+
+Configuration NAMES only: inspect sanitized examples and the existing deployment guide; values stay private. Dependency manifests/lockfiles remain authoritative. No production/data/auth/hosting changes are authorized by this audit. Preserve all prior handoff sections and successful exact-source tests.
+
+<!-- END MAINTENANCE CONTINUITY 2026-10-11 -->
+
+Sanitized source recovery is published on `codex/recovery-storage-2026-10-11` in the existing owner repository. Resolve its exact SHA from GitHub; this documentation checkpoint does not provision Oracle or publish an application. Private runtime/database/media/keys and the separate dirty analysis checkout remain outside this source recovery branch.
