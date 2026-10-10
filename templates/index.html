@@ -10,14 +10,24 @@
   <title>Open Video Downloader</title>
   <link rel="manifest" href="/static/manifest.webmanifest" />
   <link rel="apple-touch-icon" href="/static/apple-touch-icon.png" />
-  <link rel="stylesheet" href="/static/style.css?v=4" />
+  <link rel="stylesheet" href="/static/style.css?v=5" />
 </head>
 <body>
   <main class="wrap">
-    <section class="hero">
+    <section id="loginPanel" class="card hidden">
+      <h2>Owner login</h2><p class="muted">Your private downloader and library.</p>
+      <form id="loginForm"><label for="ownerPassword">Password</label><input id="ownerPassword" type="password" autocomplete="current-password" required maxlength="256"/><button class="primary">Sign in</button></form>
+      <p id="loginMessage" role="alert"></p>
+    </section>
+    <nav id="navigation" aria-label="Main navigation">
+      <button data-view="quick" class="primary">Quick Download</button><button data-view="batch" class="ghost">Batch</button>
+      <button data-view="membership" class="ghost">Membership Import</button><button data-view="library" class="ghost">My Library</button>
+      <button data-view="history" class="ghost">History</button><button data-view="settings" class="ghost">Settings</button>
+    </nav>
+    <section class="hero" data-panel="quick">
       <div class="topline">
         <div class="privacy-badge"><span class="privacy-dot"></span>Private on your Tailscale network</div>
-        <div class="version-badge">Cloud</div>
+        <div class="version-badge">Private library</div>
       </div>
 
       <div class="hero-copy">
@@ -32,6 +42,7 @@
         </div>
         <button id="analyze" class="primary" type="button">Analyze</button>
       </div>
+      <label class="connection-choice">Analyze with<select id="analysisAccount"><option value="">Public / no account</option><option value="youtube">YouTube connection</option></select></label>
       <div id="storageWarning" class="status bad hidden" role="alert"></div>
       <div id="status" class="status" aria-live="polite"></div>
 
@@ -60,7 +71,7 @@
             <span id="saveExt" class="file-ext"></span>
           </div>
           <div class="save-actions">
-            <button id="saveFile" class="success" type="button">Save file</button>
+            <button id="saveFile" class="success" type="button">Download to This Device</button>
             <button id="removeFile" class="ghost" type="button">Remove server file</button>
             <button id="newDownload" class="secondary" type="button">New download</button>
           </div>
@@ -70,7 +81,7 @@
       </section>
     </section>
 
-    <section id="result" class="card hidden">
+    <section id="result" class="card hidden" data-panel="quick">
       <div class="media">
         <img id="thumb" alt="" />
         <div class="media-copy">
@@ -89,6 +100,11 @@
         <div class="field-hint">The correct file extension is added automatically.</div>
       </div>
 
+      <p id="description" class="muted"></p><p id="subtitleInfo" class="muted"></p>
+      <div class="options"><label>Save to<select id="destination"><option value="library">Server library · keep until deleted</option><option value="transfer">Quick transfer · temporary</option></select></label>
+      <label>Account<select id="quickAccount"><option value="">Public / no account</option><option value="youtube">YouTube connection</option></select></label></div>
+      <label><input id="forceDownload" type="checkbox"/> Force a new copy even if already downloaded</label>
+      <div id="qualityButtons" class="actions"></div>
       <div class="actions">
         <button id="best" class="primary" type="button">Download best quality</button>
         <button id="audio" class="secondary" type="button">Audio only</button>
@@ -103,12 +119,51 @@
       </details>
     </section>
 
-    <section class="card" aria-label="Recent jobs">
+    <section class="card hidden" data-panel="history" aria-label="Recent jobs">
       <div class="field-head"><strong>Recent jobs</strong><span id="serverStorage"></span></div>
       <div id="recentJobs" class="history-list"></div>
-      <p class="save-note">Temporary files and history expire automatically. Server restarts clear history and abandoned files.</p>
+      <p class="save-note">Quick transfers expire automatically. Library files remain until you delete them. History survives restarts; interrupted jobs can be retried.</p>
     </section>
 
+    <section class="card hidden" data-panel="batch">
+      <h2>Batch download</h2><p class="muted">One URL per line. Up to 100 links, downloaded conservatively in order.</p>
+      <label for="batchUrls">Media URLs</label><textarea id="batchUrls" rows="7" placeholder="https://…"></textarea>
+      <div class="options"><label>Destination<select id="batchDestination"><option value="library">Server library</option><option value="transfer">Quick transfer</option></select></label>
+      <label>Quality ceiling<select id="batchQuality"><option value="0">Best available</option><option>2160</option><option>1440</option><option>1080</option><option>720</option><option>480</option><option>360</option></select></label>
+      <label>Account<select id="batchAccount"><option value="">Public / no account</option><option value="youtube">YouTube connection</option></select></label></div>
+      <div class="actions"><button id="queueBatch" class="primary">Queue links</button><button id="pauseQueue" class="secondary">Pause queued jobs</button><button id="resumeQueue" class="secondary">Resume queue</button><button id="cancelQueued" class="danger">Cancel queued jobs</button></div>
+      <p id="batchMessage" aria-live="polite"></p><p class="save-note">Pause stops new starts; active jobs continue. Retry starts a fresh download. Partial-file resume is not enabled.</p>
+    </section>
+    <section class="card hidden" data-panel="library">
+      <div class="field-head"><h2>My Library</h2><span id="libraryCount"></span></div>
+      <div class="options"><label>Search<input id="librarySearch" type="search" placeholder="Title or creator"/></label>
+      <label>Sort<select id="librarySort"><option value="newest">Newest first</option><option value="oldest">Oldest first</option><option value="title">Title</option><option value="size">Largest first</option></select></label>
+      <label>Collection<input id="libraryCollection" placeholder="All collections"/></label>
+      <label>Watched<select id="libraryWatched"><option value="">All</option><option value="false">Unwatched</option><option value="true">Watched</option></select></label></div>
+      <div class="actions"><button id="refreshLibrary" class="secondary">Refresh</button><button id="downloadSelected" class="primary">Download selected to This Device</button><button id="selectLibrary" class="ghost">Select all shown</button></div>
+      <p class="save-note">Browser saves may ask for each file. These transfers go to your device only when requested.</p>
+      <div id="playerPanel" class="hidden"><video id="libraryPlayer" controls playsinline preload="metadata"></video><h3 id="playingTitle"></h3><p id="playingDetails" class="muted"></p><button id="closePlayer" class="ghost">Close player</button><p class="save-note">Playback depends on your browser’s codecs. Download to your device if a format cannot play.</p></div>
+      <div id="libraryGrid" class="library-grid"></div><p id="libraryMessage" aria-live="polite"></p>
+    </section>
+    <section class="card hidden" data-panel="membership">
+      <h2>Membership Import</h2><p class="muted">YouTube only, experimental until tested with your account. First download one accessible members-only video with your connection. A scan is bounded and includes only explicitly identified members-only items.</p>
+      <label>Channel membership URL<input id="membershipUrl" type="url" placeholder="https://www.youtube.com/@channel/membership"/></label>
+      <label>Maximum candidates<select id="membershipLimit"><option>50</option><option>100</option><option>200</option></select></label>
+      <div class="actions"><button id="scanMembership" class="primary">Scan / rescan</button><button id="selectMembers" class="ghost">Select all shown</button><button id="importMembers" class="secondary">Save selected to Library</button></div>
+      <label>Filter<input id="memberSearch" type="search" placeholder="Title"/></label><p id="membershipMessage" aria-live="polite"></p><div id="membershipList"></div>
+    </section>
+    <section class="card hidden" data-panel="settings">
+      <h2>Settings</h2><p id="storageDashboard" class="muted"></p>
+      <div class="options"><label>Default destination<select id="preferredDestination"><option value="library">Server library</option><option value="transfer">Quick transfer</option></select></label>
+      <label>Default quality ceiling<select id="preferredQuality"><option value="0">Best available</option><option>2160</option><option>1440</option><option>1080</option><option>720</option><option>480</option><option>360</option></select></label></div>
+      <button id="savePreferences" class="primary">Save preferences</button>
+      <h3>Account connections</h3><p id="accountState" class="muted"></p>
+      <p class="save-note">Import an explicitly exported Netscape file containing only youtube.com cookies. The server stores it with private permissions. Your Mac session does not automatically connect a VPS. Never supply your password or a whole browser profile.</p>
+      <label>Session file<input id="cookieFile" type="file" accept=".txt"/></label>
+      <label><input id="cookieConsent" type="checkbox"/> This is my session, and I have permission to access the media.</label>
+      <div class="actions"><button id="connectAccount" class="secondary">Import YouTube session</button><button id="disconnectAccount" class="danger">Disconnect and delete session</button><button id="logout" class="ghost">Sign out</button></div>
+      <p id="settingsMessage" aria-live="polite"></p>
+    </section>
     <section class="tips-card">
       <div>
         <strong>Tip for iPhone</strong>
@@ -121,6 +176,7 @@
       For public or authorized, non-DRM media. This build does not bypass DRM, paywalls, private accounts, or other access controls.
     </p>
   </main>
-  <script src="/static/app.js?v=4"></script>
+  <script src="/static/app.js?v=5"></script>
+  <script src="/static/library.js?v=5"></script>
 </body>
 </html>

@@ -52,7 +52,7 @@ def clean_formats(info: dict) -> list[dict]:
 
     for f in info.get("formats") or []:
         fmt_id = f.get("format_id")
-        if not fmt_id:
+        if not fmt_id or f.get("has_drm"):
             continue
 
         vcodec = f.get("vcodec")
@@ -109,6 +109,7 @@ def clean_formats(info: dict) -> list[dict]:
             "protocol": protocol,
             "format_note": note,
             "filesize": filesize,
+            "filesize_kind": "exact" if f.get("filesize") else "estimated" if f.get("filesize_approx") else "unknown",
         })
 
     out.sort(
@@ -160,7 +161,12 @@ def ydl_base_opts() -> dict:
         "cachedir": False,
         "js_runtimes": {"deno": {}},
         "remote_components": set(),
-        # Intentionally no cookies, credential import, DRM tools, or access-control bypass.
+        "allowed_extractors": ["default"],
+        "allow_unplayable_formats": False,
+        "hls_prefer_native": True,
+        "concurrent_fragment_downloads": 1,
+        "format_sort": ["res", "vcodec:h264", "acodec:aac"],
+        # Session import is explicit and provider-scoped in accounts.py.
     }
 
 

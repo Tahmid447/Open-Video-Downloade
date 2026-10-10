@@ -76,6 +76,7 @@ function renderProgress(data) {
   $("progressPanel").dataset.state = data.status || "working";
 
   const labels = {
+    analyzing: "Analyzing…", ready: "Ready to download", queued: "Queued", saving: "Saving to library…", interrupted: "Interrupted by restart", expired: "Temporary file expired", duplicate: "Already in library",
     preparing: "Preparing download…",
     downloading: "Downloading…",
     processing: "Processing / merging…",
@@ -146,7 +147,13 @@ function prepareSavePanel(data) {
   $("saveExt").textContent = parts.ext;
   $("savePanel").classList.remove("hidden");
   $("saveFile").disabled = false;
-  updateExpiry();
+  if (data.library_id) {
+    $("fileExpiry").textContent = "Saved in your server library. This copy remains until you delete it.";
+    $("removeFile").classList.add('hidden');
+  } else {
+    $("removeFile").classList.remove('hidden');
+    updateExpiry();
+  }
   showRunningActions(false);
 }
 
@@ -168,7 +175,7 @@ function buildFormatRow(format, index) {
   const detailBits = [format.type || "media"];
   if (format.fps) detailBits.push(`${format.fps} fps`);
   if (format.tbr) detailBits.push(`${Math.round(format.tbr)} kbps`);
-  if (format.filesize) detailBits.push(fmtSize(format.filesize));
+  if (format.filesize) detailBits.push((format.filesize_kind === "estimated" ? "≈ " : "") + fmtSize(format.filesize));
   details.textContent = detailBits.join(" · ");
 
   const codecs = document.createElement("span");
@@ -190,8 +197,8 @@ function buildFormatRow(format, index) {
   const button = document.createElement("button");
   button.type = "button";
   button.className = "secondary format-download";
-  button.textContent = "Download";
-  button.addEventListener("click", () => startDownload(format.format_id, false));
+  button.textContent = format.type === "video only" ? "Download with audio" : "Download";
+  button.addEventListener("click", () => startDownload(format.type === "video only" ? `${format.format_id}+bestaudio` : format.format_id, false));
 
   row.append(info, button);
   return row;
@@ -203,6 +210,7 @@ async function analyze() {
   if (activeJobId) return setStatus("Cancel the current download before analyzing another link.", true);
 
   currentUrl = url;
+  $("result").dataset.ready="0";
   $("result").classList.add("hidden");
   resetJobUI({hideProgress: true});
   setStatus("Analyzing media…");
@@ -212,17 +220,41 @@ async function analyze() {
     const res = await fetch("/api/info", {
       method: "POST",
       headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({url}),
+      body: JSON.stringify({url, account: $("analysisAccount").value}),
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.detail || "Analysis failed.");
 
+    if (data.kind==='embedded_choices') {
+      const formats=$("formats"); formats.replaceChildren();
+      for(const choice of data.choices) {
+        const button=document.createElement('button'); button.className='secondary'; button.textContent=choice.title;
+        button.addEventListener('click',()=>{$('url').value=choice.url; analyze();}); formats.append(button);
+      }
+      $('title').textContent=data.title; $('meta').textContent='Choose one embedded media item to analyze.';
+      $('thumb').style.display='none'; $('qualityButtons').replaceChildren(); $('description').textContent=''; $('subtitleInfo').textContent='';
+      $('best').disabled=true; $('audio').disabled=true;
+      $('result').dataset.ready='1'; $('result').classList.remove('hidden'); document.querySelector('.formats-panel').open=true;
+      setStatus(`${data.choices.length} embedded choices. Select one to analyze.`); return;
+    }
+    $("best").disabled=false;
     $("title").textContent = data.title || "Untitled video";
     $("thumb").src = data.thumbnail || "";
     $("thumb").style.display = data.thumbnail ? "block" : "none";
     $("filename").value = cleanClientFilename(data.suggested_filename || data.title || "download");
 
     const pieces = [];
+    $("quickAccount").value = $("analysisAccount").value;
+    $("description").textContent = (data.description || "").slice(0, 500);
+    $("subtitleInfo").textContent = `Subtitles: ${(data.subtitles || []).join(', ') || 'none listed'} · Automatic captions: ${(data.automatic_captions || []).join(', ') || 'none listed'}`;
+    const qualities = $("qualityButtons"); qualities.replaceChildren();
+    for (const height of data.qualities || []) {
+      const button = document.createElement('button'); button.className='secondary'; button.textContent=`${height}p`;
+      button.addEventListener('click', () => startDownload('',false,height)); qualities.append(button);
+    }
+    $("audio").disabled = data.audio_available === false;
+    if (data.platform) pieces.push(data.platform);
+    if (data.upload_date) pieces.push(data.upload_date);
     if (data.uploader) pieces.push(data.uploader);
     if (data.duration) pieces.push(fmtDuration(data.duration));
     $("meta").textContent = pieces.join(" · ");
@@ -231,6 +263,7 @@ async function analyze() {
     formats.replaceChildren();
     data.formats.forEach((format, index) => formats.appendChild(buildFormatRow(format, index)));
 
+    $("result").dataset.ready="1";
     $("result").classList.remove("hidden");
     setStatus(`Ready. ${data.formats.length} format${data.formats.length === 1 ? "" : "s"} found.`);
   } catch (error) {
@@ -260,7 +293,7 @@ async function pollDownload(jobId) {
       return;
     }
     renderProgress(data);
-    if (["error", "cancelled", "completed"].includes(data.status)) {
+    if (["error", "cancelled", "completed", "interrupted", "expired", "duplicate"].includes(data.status)) {
       activeJobId = null;
       setDownloadButtonsDisabled(false);
       showRunningActions(false);
@@ -279,7 +312,7 @@ async function pollDownload(jobId) {
   }
 }
 
-async function startDownload(formatId = "", audioOnly = false) {
+async function startDownload(formatId = "", audioOnly = false, quality = null) {
   if (!currentUrl) return setStatus("Analyze a link first.", true);
   if (activeJobId) return setStatus("A download is already running.", true);
 
@@ -310,12 +343,20 @@ async function startDownload(formatId = "", audioOnly = false) {
         format_id: formatId,
         audio_only: audioOnly,
         filename: requestedName,
+        destination: $("destination").value,
+        account: $("quickAccount").value,
+        quality: quality === null ? Number($("preferredQuality").value) : quality,
+        force: $("forceDownload").checked,
+        enqueue: true,
       }),
     });
 
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data.detail || "Download failed.");
 
+    if (data.library_id && data.duplicate) {
+      resetJobUI(); setStatus('Already in My Library.'); window.showView('library'); return;
+    }
     activeJobId = data.job_id;
     rememberJob(data.job_id);
     refreshHistory();
@@ -383,6 +424,7 @@ function newDownload() {
   currentUrl = "";
   $("url").value = "";
   $("filename").value = "";
+  $("result").dataset.ready="0";
   $("result").classList.add("hidden");
   resetJobUI({hideProgress: true});
   setStatus("Ready for another link.");
@@ -405,7 +447,7 @@ $("pasteUrl").addEventListener("click", pasteFromClipboard);
 $("url").addEventListener("keydown", (event) => {
   if (event.key === "Enter") analyze();
 });
-$("best").addEventListener("click", () => startDownload("", false));
+$("best").addEventListener("click", () => startDownload("", false, 0));
 $("audio").addEventListener("click", () => startDownload("", true));
 $("cancelDownload").addEventListener("click", cancelCurrentDownload);
 $("saveFile").addEventListener("click", saveCompletedFile);
@@ -422,7 +464,7 @@ async function selectJob(job) {
   rememberJob(job.job_id);
   renderProgress(job);
   if (job.status === "completed") prepareSavePanel(job);
-  else if (!["error", "cancelled"].includes(job.status)) {
+  else if (!["error", "cancelled", "interrupted", "expired", "duplicate"].includes(job.status)) {
     activeJobId = job.job_id;
     setDownloadButtonsDisabled(true);
     showRunningActions(true);
@@ -464,7 +506,18 @@ async function refreshHistory(restore = false) {
       chip.dataset.state = job.status;
       chip.textContent = labels[job.status] || job.status;
       row.append(open, chip);
-      if (["completed", "error", "cancelled"].includes(job.status)) {
+      if (["error", "cancelled", "interrupted", "expired"].includes(job.status)) {
+        const retry = document.createElement('button'); retry.className='ghost compact'; retry.textContent='Retry';
+        retry.addEventListener('click', async () => {
+          try { await window.api(`/api/jobs/${job.job_id}/retry`,{method:'POST'}); refreshHistory(); }
+          catch (error) { setStatus(error.message,true); }
+        }); row.append(retry);
+      }
+      if (!["completed", "error", "cancelled", "interrupted", "expired", "duplicate"].includes(job.status)) {
+        const cancel = document.createElement('button'); cancel.className='danger compact'; cancel.textContent='Cancel';
+        cancel.addEventListener('click',async()=>{await fetch(`/api/download/cancel/${job.job_id}`,{method:'POST'}); refreshHistory();}); row.append(cancel);
+      }
+      if (["completed", "error", "cancelled", "interrupted", "expired", "duplicate"].includes(job.status)) {
         const remove = document.createElement("button");
         remove.className = "ghost compact";
         remove.textContent = job.status === "completed" ? "Remove server file" : "Dismiss";
@@ -473,12 +526,12 @@ async function refreshHistory(restore = false) {
       }
       list.append(row);
     }
-    if (!data.jobs.length) list.textContent = "Jobs appear here while this server is running.";
+    if (!data.jobs.length) list.textContent = "Your durable download history appears here.";
     if (restore && data.jobs.length) {
       let preferred;
       try { preferred = localStorage.getItem("ovd-current-job"); } catch { /* optional */ }
       const job = data.jobs.find(j => j.job_id === preferred)
-        || data.jobs.find(j => !["completed", "error", "cancelled"].includes(j.status))
+        || data.jobs.find(j => !["completed", "error", "cancelled", "interrupted", "expired", "duplicate"].includes(j.status))
         || data.jobs[0];
       selectJob(job);
     }
@@ -495,4 +548,4 @@ function updateExpiry() {
 $("removeFile").addEventListener("click", () => { if (completedJobId) removeServerFile(completedJobId); });
 setInterval(updateExpiry, 1000);
 setInterval(refreshHistory, 8000);
-refreshHistory(true);
+// Owner login bootstraps history in library.js.

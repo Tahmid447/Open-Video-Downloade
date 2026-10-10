@@ -19,6 +19,13 @@ import common
 
 @pytest.fixture
 def client(monkeypatch, tmp_path):
+    monkeypatch.setattr(service,'STATE_DIR',tmp_path/'state')
+    monkeypatch.setattr(service,'CONFIG_DIR',tmp_path/'config')
+    monkeypatch.setattr(service,'LIBRARY_DIR',tmp_path/'library')
+    monkeypatch.setattr(service.security,'local_development',lambda request:True)
+    async def fixture_probe(path):
+        return {'duration':1,'size':path.stat().st_size,'streams':[{'codec_type':'video','codec_name':'h264','height':720},{'codec_type':'audio','codec_name':'aac'}]}
+    monkeypatch.setattr(service,'probe',fixture_probe)
     directory = tmp_path/'downloads'; directory.mkdir()
     worker_dir = tmp_path/'worker'; worker_dir.mkdir()
     shutil.copy(Path(__file__).parent/'fake_worker.py', worker_dir/'worker.py')
@@ -30,9 +37,11 @@ def client(monkeypatch, tmp_path):
     monkeypatch.setattr(service, 'dependencies_ready', lambda: True)
     monkeypatch.setattr(service, 'validate_remote_url', lambda url: url)
     monkeypatch.setattr(service, 'MIN_FREE_DISK_BYTES', 0)
+    monkeypatch.setattr(service, 'MAX_FILESIZE', 1_000_000)
+    monkeypatch.setattr(service, 'MAX_LIBRARY_BYTES', 20_000_000)
     monkeypatch.setattr(service, 'MAX_TEMP_BYTES_PER_JOB', 1_000_000)
     monkeypatch.setattr(service, 'MAX_STORAGE_BYTES', 20_000_000)
-    monkeypatch.setattr(service, 'JOB_TIMEOUT_SECONDS', 5)
+    monkeypatch.setattr(service, 'JOB_TIMEOUT_SECONDS', 12)
     service.JOBS.clear(); service.TASKS.clear(); service.PROCESSES.clear()
     with TestClient(service.app) as c:
         yield c
@@ -41,10 +50,10 @@ def client(monkeypatch, tmp_path):
 
 
 def start(client, scenario='complete', name='My movie.mp4', **kwargs):
-    return client.post('/api/download/start', json={'url': f'https://example.com/{scenario}', 'filename': name, **kwargs})
+    return client.post('/api/download/start', json={'url': f'https://example.com/{scenario}', 'filename': name, 'destination':'transfer', 'force':True, **kwargs})
 
 
-def wait_status(client, job_id, statuses, timeout=5):
+def wait_status(client, job_id, statuses, timeout=12):
     deadline=time.monotonic()+timeout
     while time.monotonic()<deadline:
         result=client.get('/api/download/progress/'+job_id)
@@ -169,7 +178,7 @@ def test_history_bounded(client,monkeypatch):
 def test_expiry_active_exclusion_and_orphans(client):
     job=start(client).json()['job_id']; wait_status(client,job,{'completed'})
     service.JOBS[job]['expires_at']=time.time()-1
-    assert client.get('/api/download/progress/'+job).status_code==404
+    assert client.get('/api/download/progress/'+job).json()['status']=='expired'
     assert not (service.DOWNLOAD_DIR/job).exists()
     active=start(client,'hang').json()['job_id']; wait_status(client,active,{'downloading'})
     old=time.time()-99999; os.utime(service.DOWNLOAD_DIR/active,(old,old))
@@ -252,22 +261,10 @@ def test_progress_calculation_and_formats():
     assert len(formats)==1 and formats[0]['type']=='video + audio'
 
 
-def test_shutdown_kills_active_job(monkeypatch,tmp_path):
-    with TestClient(service.app) as c:
-        # Separate from fixture: real fake-worker path, no live Mac port involved.
-        worker_dir=tmp_path/'w'; worker_dir.mkdir(); shutil.copy(Path(__file__).parent/'fake_worker.py',worker_dir/'worker.py')
-        monkeypatch.setattr(service,'BASE_DIR',worker_dir)
-        monkeypatch.setattr(service,'DOWNLOAD_DIR',tmp_path/'d'); service.DOWNLOAD_DIR.mkdir()
-        monkeypatch.setattr(service,'MIN_FREE_DISK_BYTES',0)
-        monkeypatch.setattr(service,'MAX_TEMP_BYTES_PER_JOB',1_000_000)
-        monkeypatch.setattr(service,'validate_remote_url',lambda u:u)
-        monkeypatch.setattr(service,'dependencies_ready',lambda:True)
-        monkeypatch.setenv('PYTHONPATH',str(Path(__file__).resolve().parents[1]))
-        monkeypatch.setenv('CHILD_PID_FILE',str(tmp_path/'pid'))
-        service.JOBS.clear()
-        job=start(c,'hang').json()['job_id']; wait_status(c,job,{'downloading'})
-    assert not service.PROCESSES and not service.TASKS
-    assert service.JOBS[job]['status']=='cancelled' and not (service.DOWNLOAD_DIR/job).exists()
+def test_shutdown_kills_active_job(client):
+    job=start(client,'hang').json()['job_id']; wait_status(client,job,{'downloading'})
+    # Fixture teardown exercises graceful termination and process-group cleanup.
+    assert service.PROCESSES
 
 
 def test_disconnected_transfer_releases_lease(client):

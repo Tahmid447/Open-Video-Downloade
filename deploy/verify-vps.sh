@@ -13,6 +13,14 @@ assert c["Config"]["User"] == "10001:10001", "Unexpected user"
 assert c["HostConfig"]["ReadonlyRootfs"], "Writable root filesystem"
 assert c["HostConfig"]["RestartPolicy"]["Name"] == "unless-stopped"
 '
+# Every media/API endpoint requires owner login even for another reachable tailnet peer.
+[ "$(curl -sS --max-time 5 -o /dev/null -w '%{http_code}' http://127.0.0.1:8000/api/library)" = 401 ]
+"${compose[@]}" exec -T downloader python -c '
+import pathlib
+for d in ("library","state","config"):
+    p=pathlib.Path("/data")/d
+    assert p.is_mount(), f"Missing persistent volume: {d}"
+'
 curl -fsS --max-time 5 http://127.0.0.1:8000/api/health | python3 -c 'import json,sys; assert json.load(sys.stdin)["ok"]'
 iptables -w -C FORWARD -j DOCKER-USER
 iptables -w -C DOCKER-USER -j OVD-EGRESS

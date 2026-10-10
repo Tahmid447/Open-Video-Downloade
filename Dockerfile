@@ -6,12 +6,12 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --gid 10001 downloader \
     && useradd --uid 10001 --gid 10001 --no-create-home downloader \
-    && mkdir -p /data/downloads && chown -R 10001:10001 /data
+    && mkdir -p /data/downloads /data/library /data/state /data/config && chown -R 10001:10001 /data
 COPY --from=deno /deno /usr/local/bin/deno
 WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt && pip check
-COPY app.py common.py worker.py network_guard.py ./
+COPY app.py common.py worker.py network_guard.py database.py extraction.py media.py security.py accounts.py manage.py ./
 COPY static/ static/
 COPY templates/ templates/
 COPY deploy/healthcheck.sh /app/healthcheck.sh

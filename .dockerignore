@@ -11,3 +11,9 @@
 !templates/**
 !deploy/
 !deploy/healthcheck.sh
+!database.py
+!extraction.py
+!media.py
+!security.py
+!accounts.py
+!manage.py

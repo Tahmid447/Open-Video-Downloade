@@ -6,11 +6,11 @@ This is an additional installation derived from the live Mac version. The Mac ap
 
 Devices with Tailscale → private HTTPS Serve on the Ubuntu host → `127.0.0.1:8000` → non-root Docker container → FastAPI + yt-dlp + FFmpeg. Deno and bundled yt-dlp EJS support modern YouTube extraction; no cookies, credentials, remote script components or access-control bypass are enabled. Some sites reject cloud IPs; that cannot be solved by making this service public.
 
-Use Ubuntu 24.04 LTS (22.04 and 26.04 also accepted), 2 GB RAM and at least 20 GB disk. Docker Engine 28+ is required because older versions had a localhost publishing issue. The installer uses Docker's official APT repository and Tailscale's official Linux installer. It refreshes package indexes and installs required packages; it does not blindly upgrade/remove unrelated packages.
+Use Ubuntu 24.04 LTS (22.04 and 26.04 also accepted), 2 GB RAM and preferably 30+ GB disk for the default library/staging budgets. Docker Engine 28+ is required because older versions had a localhost publishing issue. The installer uses Docker's official APT repository and Tailscale's official Linux installer. It refreshes package indexes and installs required packages; it does not blindly upgrade/remove unrelated packages.
 
-Defaults in `.env.example`: one download plus one link analysis at a time; 1 GiB per final file/individual stream; 3 GiB temporary space per job; 6 GiB total temporary storage; 1 GiB disk reserve; 30 minute job timeout; 90 second analysis timeout; 2 hour fixed file retention; 30 history entries. Oldest completed entries/files can be evicted earlier when this history cap is reached. Downloads above those limits fail cleanly. Unknown sizes have inherited OS file-size limits as well as progress/storage checks. Disk usage checks every 250 ms are safety thresholds, not filesystem quotas; an in-flight write may briefly exceed a threshold. FFmpeg can need more space than the final file.
+Defaults in `.env.example`: one download plus one link analysis at a time; 1 GiB per final file/individual stream; 3 GiB temporary space per job; 6 GiB total temporary storage; 1 GiB disk reserve; 30 minute job timeout; 90 second analysis timeout; 2 hour fixed file retention; 30 resident temporary history entries, a 100-job queue and a 10 GiB persistent library. Oldest temporary completed files can be evicted when the resident history cap is reached; durable history and permanent library items are retained. Downloads above those limits fail cleanly. Unknown sizes have inherited OS file-size limits as well as progress/storage checks. Disk usage checks every 250 ms are safety thresholds, not filesystem quotas; an in-flight write may briefly exceed a threshold. FFmpeg can need more space than the final file.
 
-Media lives in one Docker volume, so crashes leave removable partial files rather than files embedded in an image. On startup, abandoned job folders are removed because in-memory jobs cannot survive a restart. Completed files are also cleared on restart/update. Periodic cleanup never removes an active job or a file being streamed. Serving a file does not extend its fixed expiry. Save important files to your browser before updates. There is no permanent download archive or database.
+Media, temporary files, SQLite and private config use separate persistent volumes. Startup marks active work interrupted for explicit retry. Abandoned temporary folders are removed; completed Quick Transfer copies retain their fixed expiry. Library files and history survive restart/update. Cleanup never touches library data, active jobs or leased transfers.
 
 ## Initial installation from the Mac
 
@@ -24,7 +24,7 @@ This transfers only a whitelist of source/deployment files; builds the image on 
 
 If Tailscale is not logged in, the installer displays a one-time authorization URL and waits up to 60 seconds. If it is still pending it exits cleanly; open that URL in your browser and rerun the same command. Tailscale HTTPS/Serve may separately require tailnet admin authorization. Follow the CLI's authorization URL, then rerun. No reusable Tailscale key is saved. The installed `serve --help` is checked before configuring `tailscale serve --bg --https=443 http://127.0.0.1:8000`. Existing public sharing or an unrelated Serve proxy makes installation stop for inspection rather than overwrite it.
 
-Configuration: `/opt/open-video-downloader/shared/.env` (root, mode 0600). Keep reserved `OVD_PORT`, `OVD_IMAGE` and `DOWNLOAD_DIR` out of it. The application must use a single Uvicorn worker. Do not scale Compose replicas: history and admission are intentionally in one process.
+Configuration: `/opt/open-video-downloader/shared/.env` (root, mode 0600). Keep all reserved port, image, root-path and security settings out of it; the deployment script checks them. The application must use a single Uvicorn worker. Do not scale Compose replicas: scheduling and admission are intentionally in one process.
 
 ## Updates and rollback
 
@@ -32,7 +32,7 @@ Configuration: `/opt/open-video-downloader/shared/.env` (root, mode 0600). Keep 
 ./deploy/update-vps.sh username@server
 ```
 
-Config is preserved and backed up before each update. New images build while the old app is running. A failed build leaves the old app running; failed startup/verification rolls back to the old image. Downloads/history do reset when containers are replaced, including rollback. Current and three previous releases/config backups are retained. The uploader never copies your `.venv`, local `.env`, downloaded media, logs, tests or Mac LaunchAgent scripts. Images are tagged by release. Old release images are removed; global Docker build cache is not pruned because other apps may use it. On a dedicated VPS review disk usage periodically with `sudo docker system df`; prune old build cache deliberately if needed.
+Config is preserved and backed up before each update. New images build while the old app is running. A failed build leaves the old app running; failed startup/verification rolls back to the old image. Active jobs are interrupted; durable history and library files survive container replacement. The additive schema check refuses incompatible downgrades. Current and three previous releases/config backups are retained. The uploader never copies your `.venv`, local `.env`, downloaded media, logs, tests or Mac LaunchAgent scripts. Images are tagged by release. Old release images are removed; global Docker build cache is not pruned because other apps may use it. On a dedicated VPS review disk usage periodically with `sudo docker system df`; prune old build cache deliberately if needed.
 
 Manual rollback on the VPS, after saving completed files:
 
@@ -69,3 +69,30 @@ The verifier checks container health, UID, read-only root, restart policy, local
 Install `requirements.txt` and `requirements-test.txt` in an isolated virtual environment, then run `pytest -q`. Tests use mocked/small jobs, including real worker-process cancellation and child cleanup. `node --check static/app.js` validates JavaScript. Test Compose with a copy of `.env.example` as `deploy/.env`; change the local test host port to 18080 using `OVD_PORT=18080` so the Mac's port 8000 stays untouched. Linux container smoke tests use this test port. The production updater prohibits that override.
 
 Sources: [Docker Ubuntu installation](https://docs.docker.com/engine/install/ubuntu/), [localhost publishing caveat](https://docs.docker.com/engine/network/port-publishing/), [Docker and firewall rules](https://docs.docker.com/engine/network/packet-filtering-firewalls/), [Tailscale Linux installation](https://tailscale.com/docs/install/linux), [Serve CLI](https://tailscale.com/docs/reference/tailscale-cli/serve), [yt-dlp dependencies](https://github.com/yt-dlp/yt-dlp#dependencies).
+
+## Durable library edition (October 10 update)
+
+Deploy this new development copy only after server access is supplied **and deployment is explicitly authorized**. The original cloud package remains available separately. No VPS has been contacted during development.
+
+Compose preserves the original temporary `media` volume and adds persistent `library`, `state` and `config` volumes. These are independent of each release directory/image. Temporary cleanup never traverses the library. Do not run `down -v`, change the Compose project name, or replace volume names on a real deployment. Config permissions are 0700 directories/0600 secrets. Keep media and backups outside Git and source uploads.
+
+After deployment, configure the owner password interactively on the server:
+
+```sh
+cd /opt/open-video-downloader/current
+sudo docker compose --project-name open-video-downloader --env-file deploy/.env --env-file deploy/image.env -f deploy/docker-compose.yml exec downloader python manage.py set-password
+```
+
+Do not place the password in a shell argument, environment file or chat. Production uses Secure cookies, so sign in through the private Tailscale HTTPS URL. An unconfigured login makes protected APIs return 401/503 while health remains inspectable. The verifier checks unauthenticated library access returns 401 and the persistent mounts exist. Tailnet grants still need real-server review.
+
+Updates build first, stop the previous scheduler, take a WAL-safe SQLite snapshot into `/opt/open-video-downloader/backups/database-<release>.sqlite3`, and then start/verify the new image. Database snapshots are retained independently of source release pruning. Media and secret volumes remain untouched. Schema version 1 is additive; an older application that understands this schema can recover its own jobs. A future incompatible schema is refused rather than silently downgraded. Automatic image rollback never restores a stale database over newer library changes. Inspect migration compatibility before a future schema change. The original pre-library image cannot display this new library, although the new volumes remain preserved on image rollback.
+
+For a backup taken manually:
+
+```sh
+sudo docker compose --project-name open-video-downloader --env-file deploy/.env --env-file deploy/image.env -f deploy/docker-compose.yml exec -T downloader python manage.py backup-db --output /data/state/manual-backup.sqlite3
+```
+
+Copy that snapshot to a private host backup directory and back up config plus the media volume. A SQLite snapshot alone does not contain videos or owner/account configuration. Test restoration before relying on it. Backups can contain signed source URLs/session configuration; protect them as private. No deletion of persistent volumes is part of the updater.
+
+Default limits are 1 GiB per final file, 3 GiB temporary staging per job, 6 GiB total temporary storage, 10 GiB library storage, 1 GiB free reserve, one concurrent download, queue cap 100. Plan more than 20 GiB total disk for OS/images/staging/library and backups; configured quotas do not reserve physical disk. Server-side copying may temporarily need both the input and final file. For external storage, mount the actual volume at `/data/library`; the required-mount check prevents accidental writes to the root filesystem when absent.

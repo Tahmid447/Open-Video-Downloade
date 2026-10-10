@@ -13,8 +13,17 @@ services:
     env_file: .env
     environment:
       DOWNLOAD_DIR: /data/downloads
+      LIBRARY_DIR: /data/library
+      STATE_DIR: /data/state
+      CONFIG_DIR: /data/config
+      LIBRARY_REQUIRE_MOUNT: '1'
+      COOKIE_SECURE: '1'
+      OVD_ALLOW_UNAUTHENTICATED_LOCAL: '0'
     volumes:
       - media:/data/downloads
+      - library:/data/library
+      - state:/data/state
+      - config:/data/config
     tmpfs:
       - /tmp:size=128m,mode=1777
     read_only: true
@@ -32,6 +41,9 @@ services:
     networks: [private]
 volumes:
   media:
+  library:
+  state:
+  config:
 networks:
   private:
     enable_ipv6: false

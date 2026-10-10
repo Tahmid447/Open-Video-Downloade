@@ -14,7 +14,7 @@ command -v docker >/dev/null && command -v tailscale >/dev/null
 major="$(docker version --format '{{.Server.Version}}' | cut -d. -f1)"
 [ "$major" -ge 28 ] || { echo 'Docker Engine 28+ is required.' >&2; exit 2; }
 # Refuse an unexpected port or an already-enabled public sharing configuration.
-[ ! -f "$BASE/shared/.env" ] || ! grep -Eq '^(OVD_PORT|OVD_IMAGE|DOWNLOAD_DIR)=' "$BASE/shared/.env" || { echo 'Reserved settings in shared .env; remove them before deployment.' >&2; exit 2; }
+[ ! -f "$BASE/shared/.env" ] || ! grep -Eq '^(OVD_PORT|OVD_IMAGE|DOWNLOAD_DIR|LIBRARY_DIR|STATE_DIR|CONFIG_DIR|COOKIE_SECURE|OVD_ALLOW_UNAUTHENTICATED_LOCAL|LIBRARY_REQUIRE_MOUNT)=' "$BASE/shared/.env" || { echo 'Reserved settings in shared .env; remove them before deployment.' >&2; exit 2; }
 tailscale serve status --json | python3 -c '
 import json,sys
 c=json.load(sys.stdin)
@@ -68,6 +68,24 @@ rollback() {
   exit "$status"
 }
 trap rollback ERR
+# Quiesce the old scheduler after the new image builds, then take a WAL-safe DB snapshot.
+if [ -n "$OLD" ] && [ -d "$OLD" ]; then
+  "$OLD/deploy/service.sh" stop
+fi
+"${compose[@]}" run --rm --no-deps -T --entrypoint python downloader -c '
+import pathlib
+from database import Store
+p=pathlib.Path("/data/state/library.sqlite3")
+if p.exists():
+    s=Store(p); s.backup("/data/state/pre-update.sqlite3"); s.close()
+'
+# Copy the state backup out of its volume. Media and session config are never replaced.
+"${compose[@]}" run --rm --no-deps -T --entrypoint python downloader -c '
+import pathlib,sys
+p=pathlib.Path("/data/state/pre-update.sqlite3")
+if p.exists(): sys.stdout.buffer.write(p.read_bytes())
+' > "$BASE/backups/database-$release_id.sqlite3"
+chmod 0600 "$BASE/backups/database-$release_id.sqlite3"
 "$RELEASE/deploy/service.sh" start
 # Installed CLI is authoritative; do not assume a legacy Serve command.
 tailscale serve --help | grep -q -- '--bg' || { echo 'Unsupported Tailscale Serve CLI.' >&2; exit 2; }
@@ -114,5 +132,6 @@ for path in sorted((base/'backups').glob('config-*.env'),reverse=True)[4:]: path
 PY
 # Build cache otherwise grows on each future update; prune only this builder's old cache.
 # No automatic global prune: unrelated projects may depend on that cache.
-echo 'Deployment succeeded. Save files before updates: temporary job history resets.'
+echo 'Deployment succeeded. Persistent library, state and session volumes were preserved.'
+echo 'For initial owner setup: docker compose exec downloader python manage.py set-password (use the current release Compose files).'
 tailscale serve status
