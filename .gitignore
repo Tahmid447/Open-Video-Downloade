@@ -6,6 +6,7 @@ __pycache__/
 downloads/
 
 .env.*
+*.env
 !.env.example
 state/
 library/
@@ -22,3 +23,48 @@ owner.json
 *.log
 
 .local-runtime/
+
+# Private browser databases, exports and authentication material.
+Cookies
+Cookies-*
+Login Data*
+Local State
+*cookies*.txt
+*.cookie
+*.pem
+*.key
+*.p12
+*.pfx
+*.token
+*credentials*.json
+*session*.json
+*.sqlite*
+
+# Additional downloaded media and temporary artifacts.
+*.mp3
+*.aac
+*.opus
+*.ogg
+*.wav
+*.flac
+*.mov
+*.m4v
+*.tmp
+*.bak
+.DS_Store
+
+# Private work, evidence and backup packages stay outside published source.
+work/
+outputs/
+evidence/
+backups/
+AUDIT.txt
+FILES.txt
+REPORT.txt
+TEST-RESULTS.txt
+SHA256SUMS
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+*.git.bundle

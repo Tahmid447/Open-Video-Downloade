@@ -1,10 +1,10 @@
 # Private VPS deployment
 
-This is an additional installation derived from the live Mac version. The Mac app, virtual environment, LaunchAgent and Tailscale settings are untouched. A full backup including the LaunchAgent is provided beside this folder. Only deploy this copy to the VPS.
+This guide describes the Tailscale alternative. For owner-authenticated public HTTPS, use README-HTTPS.md instead and do not mix the two deployment paths. Server scripts do not configure an existing Mac installation. Keep runtime backups in private storage outside the repository.
 
 ## Architecture and defaults
 
-Devices with Tailscale → private HTTPS Serve on the Ubuntu host → `127.0.0.1:8000` → non-root Docker container → FastAPI + yt-dlp + FFmpeg. Deno and bundled yt-dlp EJS support modern YouTube extraction; no cookies, credentials, remote script components or access-control bypass are enabled. Some sites reject cloud IPs; that cannot be solved by making this service public.
+Devices with Tailscale → private HTTPS Serve on the Ubuntu host → `127.0.0.1:8000` → non-root Docker container → FastAPI + yt-dlp + FFmpeg. Deno and bundled yt-dlp EJS support modern YouTube extraction; no account credentials are bundled, remote script components are disabled, and access-control bypass is unsupported. Explicit YouTube-only session imports are supported after owner setup; local Chrome sessions are unavailable on a Linux VPS. Some sites reject cloud IPs; that cannot be solved by making this service public.
 
 Use Ubuntu 24.04 LTS (22.04 and 26.04 also accepted), 2 GB RAM and preferably 30+ GB disk for the default library/staging budgets. Docker Engine 28+ is required because older versions had a localhost publishing issue. The installer uses Docker's official APT repository and Tailscale's official Linux installer. It refreshes package indexes and installs required packages; it does not blindly upgrade/remove unrelated packages.
 

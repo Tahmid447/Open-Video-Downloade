@@ -1,63 +1,125 @@
-# Open Video Downloader — durable library development edition
+# Open Video Downloader
 
-This is a separate local Git development copy on branch `feature/durable-library`. The live Mac installation, LaunchAgent, original VPS package, ZIP and backup remain intact. No server has been provisioned or deployed.
+An owner-only web application for downloading authorized, non-DRM media and keeping it in a private library. It uses FastAPI, yt-dlp and FFmpeg, with a browser interface and durable SQLite metadata.
 
-Read [Caddy HTTPS deployment instructions](deploy/README-HTTPS.md). This edition adds durable SQLite jobs, a conservative queue, owner login, a persistent server library, real media validation and richer yt-dlp previews. YouTube account/membership workflows are experimental and have not been verified with a real authorized subscription.
+## Features
 
-## Storage and execution
+- Analyze a single media URL and inspect available formats, codecs, resolution, duration and exact or estimated sizes.
+- Download at the best available quality, choose a resolution ceiling or select an exact format. Merge separate video and audio streams; extract audio as M4A.
+- Follow download progress, cancel jobs, retry interrupted work and submit a bounded batch queue.
+- Save media to a persistent library or use temporary Quick Transfer. Search, sort, organize collections, track watched status and resume playback.
+- Stream private library files with HTTP byte ranges or download them explicitly to a device.
+- Protect access with an owner password and optional local TOTP MFA; production configuration requires MFA and HTTPS.
+- Connect a signed-in Chrome profile on a Mac without a permanent cookie export. Only YouTube cookies are retained for requests, in memory, over HTTPS.
+- Download accessible YouTube members-only videos. Optional membership discovery is limited to a verified channel, includes only explicitly classified members-only items and never claims complete coverage.
 
-The server runs exactly one Uvicorn worker. Each analysis/download uses a separate process group. Cancel/shutdown terminates that group and its FFmpeg children. Cancellation during final FFprobe validation can wait for its bounded 20-second check; it cannot subsequently publish the file. Restart marks queued/active work interrupted; Retry begins a fresh download, rather than silently starting network activity. History, preferences, manifests and library metadata survive restart.
+A live authorized members-only test verified analysis, a 720p H.264/AAC download, private-library storage, browser playback and persistence after restart. Personal test URLs, media, sessions and screenshots are not included in this repository. Membership discovery remains experimental; that test did not scan an entire channel.
 
-Four separate writable roots are required: `DOWNLOAD_DIR` for temporary workers/Quick Transfer, `LIBRARY_DIR` for permanent media, `STATE_DIR` for SQLite, `CONFIG_DIR` for owner/session secrets. Production Compose mounts four named volumes. The existing `media` volume remains the temporary volume; new volumes do not replace it. TTL, history pruning and orphan cleanup apply only to temporary job directories. Library media remains until an authenticated owner explicitly confirms deletion. Incomplete library saves remain recoverable or explicitly deletable. Never run `docker compose down -v` on a real library.
+## Requirements
 
-A configured external volume should mount directly at the library root with `LIBRARY_REQUIRE_MOUNT=1`. Missing mounts make health fail and prevent writes, rather than falling back to root storage. Back up the media volume, config and consistent SQLite snapshots together. SQLite is metadata; the browser never archives video in localStorage/IndexedDB/OPFS or a service worker. Normal browser playback uses HTTP byte ranges and device downloads use normal browser saving. Browser codec and multiple-download policies still apply.
+- Python 3.11 or 3.12; the production container uses Python 3.12.
+- FFmpeg and FFprobe available on `PATH`.
+- Deno available on `PATH` for modern YouTube extraction. The container includes Deno and the pinned yt-dlp EJS package.
+- Enough disk space for the permanent library, temporary streams, merging and backups.
+- For the local Chrome connection: macOS, ordinary Google Chrome and a YouTube account already authorized to watch the requested video.
 
-## Owner login
+Dependency versions are pinned in [requirements.txt](requirements.txt). Docker installation includes the media tools; installing Python packages alone does not install FFmpeg or Deno.
 
-Production requires an owner password in the private config volume. Until configured, data endpoints fail closed; only login status and health are accessible. Configure interactively using `python manage.py set-password` and `python manage.py enroll-mfa` inside the container through SSH. `set-password` is also server recovery: it resets MFA, which must be enrolled again before exposure. Passwords are scrypt hashes, and session identifiers are stored as hashes, expire after seven days and are invalidated on password rotation or MFA enrollment. Login guesses are throttled in SQLite across restarts. Six-digit TOTP codes cannot be replayed. Secure, HttpOnly, SameSite=Strict cookies and cross-site mutation checks protect browser access. Production requires TOTP MFA and trusted HTTPS from Caddy. The application publishes only to host loopback; ports 80/443 remain closed until the operator approves final exposure. Public deployment does not require Tailscale clients.
+## Install and run locally
 
-For an explicitly isolated LOCAL development server only, set `OVD_ALLOW_UNAUTHENTICATED_LOCAL=1` and bind `127.0.0.1` on a spare port. Only loopback clients qualify. Compose forces this off. To test owner login on local HTTP, use `COOKIE_SECURE=0`; production forces Secure cookies. Do not use real account secrets during fixture testing.
-
-## Extraction and quality
-
-Maintained yt-dlp site extractors and its built-in Generic/HTML5/HLS/DASH support share one adapter. Generic pages with several media items return up to ten explicit choices; Quick Download never imports a channel or downloads a playlist. Native browser automation and arbitrary yt-dlp plugins are disabled. Supported non-DRM access depends on the site, region, IP and current extractor. DRM, live streams, upcoming premieres and access-control bypass are unsupported.
-
-Previews include available metadata, format codecs/container/resolution, exact versus estimated size, listed subtitle/caption languages and only the advertised standard height choices. Missing fields stay unknown. Best quality and ceiling presets merge separate video/audio, prefer H.264/AAC when quality ties, and prefer MP4 for merge output. Exact video-only selections explicitly add audio. Audio extraction uses M4A. We do not transcode every incompatible source merely to force browser playback. Subtitle languages are listed; subtitle downloading/embedding is not implemented.
-
-Every final file must contain FFprobe-readable audio/video streams and a positive finite duration. An extension alone is insufficient. This does not promise complete corruption detection or playback compatibility in every browser. Temporary quota and free-space checks remain thresholds, not hard filesystem quotas.
-
-## Accounts and membership
-
-The isolated Mac preview on `127.0.0.1:8001` can connect a selected Chrome profile with `OVD_LOCAL_SETUP=1` and `OVD_LOCAL_BROWSER=1`. Sign into YouTube in ordinary Chrome, confirm one authorized video plays, then choose Settings → Chrome profile → Connect Chrome. This uses the same official yt-dlp browser reader as `--cookies-from-browser chrome:PROFILE`. macOS may request Chrome Safe Storage access; credentials belong only in the native OS dialog. The reader makes a private temporary database copy, decrypts cookies locally, then retains only unexpired YouTube cookies in memory with an HTTPS-only policy. Temporary copies are removed on completion, cancellation, timeout and the next startup after an interrupted server. No Netscape export, cookie values, unrelated site sessions or browser passwords are stored in app metadata or returned by APIs. This feature is disabled in production and on non-Mac servers. The Codex in-app browser has no supported cookie-export interface.
-
-For a separate server, an explicit upload of a Netscape file containing only `youtube.com` cookies remains supported. Files containing unrelated domains are rejected. The file lives outside Git/source in private 0600 storage, is loaded read-only, and is never returned by an API or sent to insecure destinations. The picker is cleared after upload. Disk/backups still need encryption and access control: imported session files are not encrypted at rest by this application. Avoid combining yt-dlp browser reading with `--cookies FILE`, which exports all browser domains.
-
-YouTube OAuth is currently unavailable in yt-dlp. Use official current [yt-dlp session instructions](https://github.com/yt-dlp/yt-dlp/wiki/Extractors#exporting-youtube-cookies). Your Mac and VPS do not share sessions automatically. Account status reports disconnected/unverified/verified/expired/needs-attention; a failed account download requires checking/reconnecting the session, since expiry cannot be reliably inferred from all failures. Disconnect waits for account activity and removes the app connection or imported session file. It does not sign out Chrome. Deletion is unlinking, not a secure physical erase of disks/backups; revoke the session with the provider if necessary.
-
-Before Membership Import, one completed accessible video must have yt-dlp's `subscriber_only` classification and a channel ID. Scanning is limited to that verified channel's `/membership` tab, max 200 candidates, with request delays and ten seconds between account download starts. Only explicit members-only classifications enter the durable manifest; unknown/public items are excluded. Import rechecks classification before transfer. IDs deduplicate rescans and selected downloads. Public/Premium/unlisted/private videos do not count as membership verification. This is partial discovery, not an assertion that all posts, streams or member playlists are covered.
-
-## Development tests
-
-Use a separate virtual environment and `pip install -r requirements.txt -r requirements-test.txt`, then `python -m pytest -q`. Tests use isolated temporary volumes and synthetic sessions. FFmpeg/FFprobe are required. The real-site test log distinguishes public network attempts from mocks. Local Docker testing writes temporary VM/image data to the Mac; it does not establish a remote library or zero SSD usage. No paid service or object storage is required for this increment.
-
-## Review locally without changing the installed Mac app
-
-A local preview is an explicit alternative and uses temporary Mac disk space. From this source folder, use a fresh virtual environment, the existing FFmpeg/FFprobe, a separate runtime directory and a spare port:
+Clone the source and use a separate virtual environment:
 
 ```sh
+git clone https://github.com/Tahmid447/Open-Video-Downloade.git
+cd Open-Video-Downloade
 python3 -m venv .venv
-.venv/bin/pip install -r requirements.txt
+.venv/bin/python -m pip install -r requirements.txt
+```
+
+Run the owner-authenticated local application with isolated runtime storage:
+
+```sh
 export DOWNLOAD_DIR="$PWD/.local-runtime/downloads"
 export LIBRARY_DIR="$PWD/.local-runtime/library"
 export STATE_DIR="$PWD/.local-runtime/state"
 export CONFIG_DIR="$PWD/.local-runtime/config"
 export COOKIE_SECURE=0
 export OVD_LOCAL_SETUP=1
-.venv/bin/uvicorn app:app --host 127.0.0.1 --port 8001 --workers 1 --no-access-log
+export OVD_LOCAL_BROWSER=1
+export OVD_ALLOW_UNAUTHENTICATED_LOCAL=0
+export OVD_REQUIRE_MFA=0
+export OVD_REQUIRE_HTTPS=0
+.venv/bin/python -m uvicorn app:app --host 127.0.0.1 --port 8001 --workers 1 --no-access-log
 ```
 
-Open `http://127.0.0.1:8001`, create your owner password directly in the browser, optionally enroll MFA in Settings, and stop the preview with Ctrl+C. Nothing here registers a LaunchAgent or restarts port 8000. Do not treat this Mac preview directory as the future remote archive. Do not copy it, `.venv` or secrets into deployment source. For synthetic fixture-only work, the explicit loopback development bypass described above is available; real sessions should use owner login.
+Open <http://127.0.0.1:8001/> and create your owner password directly in the browser. It must contain at least 12 characters. MFA can be enrolled in Settings. These HTTP flags are for an isolated loopback preview only: never use them for a public service. Local setup and the Chrome connection require the loopback host on port 8001. Stop the foreground server with Ctrl+C. This command does not register a LaunchAgent or change another application on port 8000.
 
-## Public source review
+Always run exactly one Uvicorn worker. Run tests with synthetic sessions in their isolated temporary directories, not against a personal runtime directory.
 
-Runtime directories, credentials, account sessions, databases, personal media, local backups and private reports are excluded from the public source package and its entire history. Pattern scans and manual fixture review are preparation, not proof that arbitrary future additions are safe. Review the exact commit and file list before the first public push. No repository license has been chosen by the owner yet.
+### Connect YouTube without exporting a cookie file
+
+1. In ordinary Chrome, sign into YouTube and confirm that the requested video plays. Enter credentials only on Google's login page.
+2. In the local app, open **Settings → Account connections**, choose the matching Chrome profile and select **Connect Chrome**. macOS may ask for Chrome Safe Storage access; enter any Mac password only in the native OS dialog.
+3. Under **Quick Download**, choose **Analyze with → YouTube connection**, enter one authorized video URL and select **Analyze**. Choose a quality and save to **Server library**.
+4. Open **My Library → Play**, or explicitly download the completed file to your device.
+
+The app uses the official yt-dlp browser reader behind [`--cookies-from-browser`](https://github.com/yt-dlp/yt-dlp/wiki/FAQ#how-do-i-pass-cookies-to-yt-dlp). That reader briefly copies the selected Chrome cookie database into a private worker directory and decrypts it locally. The downloader retains only unexpired YouTube cookies in memory with an HTTPS-only policy. Temporary copies are removed on completion, cancellation, timeout and the next startup after an interrupted server. Connection metadata records a browser/profile selection, not session values. Disconnect removes the app connection; it does not sign out Chrome.
+
+The Codex in-app browser has no supported session-export interface. The Chrome connection is disabled on non-Mac servers and is not enabled by production Compose. A cloud server cannot automatically reuse your Mac's session.
+
+If a separate server needs authentication, the existing import accepts only a YouTube-only Netscape cookie file. Unrelated domains are rejected. Imported files belong in private configuration storage outside source control, with permission `0600`. Never combine browser reading with `--cookies FILE` to export an entire browser session. Imported sessions are not encrypted at rest by this app: protect the disk and backups. Disconnect unlinks an imported file; it does not guarantee physical erasure from SSDs or backups. Revoke the session with the provider when necessary.
+
+## Architecture and storage
+
+```text
+Owner browser → FastAPI authentication and API → single durable job queue
+                                             → isolated yt-dlp/FFmpeg workers
+                                             → FFprobe validation → private library
+                       SQLite stores jobs, preferences and media metadata
+```
+
+| Storage root | Purpose | Retention |
+| --- | --- | --- |
+| `DOWNLOAD_DIR` | Worker staging and Quick Transfer | Temporary; quota/TTL cleanup |
+| `LIBRARY_DIR` | Completed private media | Until the owner explicitly deletes it |
+| `STATE_DIR` | SQLite metadata and hashed login sessions | Persistent |
+| `CONFIG_DIR` | Owner configuration and optional imported sessions | Private, persistent |
+
+Cancel and shutdown terminate worker process groups, including FFmpeg children. Restart marks unfinished jobs interrupted; Retry starts fresh network activity. Library publication uses validation and recoverable staging. FFprobe must find audio/video streams and a positive finite duration before a file is published.
+
+The browser uses streaming and normal device downloads; it does not archive the library in browser storage. Back up media, private configuration and a consistent SQLite snapshot together. `manage.py backup-db` uses SQLite's backup API. External media volumes require a verified mount; avoid falling back to the system disk when a mount is absent. Never use `docker compose down -v` on a library you need to preserve.
+
+Defaults include one simultaneous download, a 100-job queue, a 1 GiB final-file limit, 3 GiB temporary space per job, 6 GiB total temporary space, a 10 GiB library limit and a 1 GiB free-space reserve. Temporary job retention is two hours. Limits are admission/runtime thresholds, not hard filesystem quotas or reserved disk capacity.
+
+## Security and limitations
+
+- Only download media you are authorized to access. There is no DRM, paywall, CAPTCHA or access-control bypass. Live streams and upcoming premieres are unsupported.
+- Site support depends on yt-dlp, region, account eligibility and network conditions. YouTube may reject a session, require browser verification or return HTTP 403/429. The app reports the limitation; it does not manufacture tokens or evade restrictions.
+- Format lists come from the source; unknown metadata stays unknown. Not every advertised format is guaranteed to download or play in every browser. Subtitle/caption languages are listed, but subtitle download/embedding is not implemented.
+- Generic pages can offer up to ten explicit media choices. Quick Download does not automatically download playlists or channels.
+- Membership Import requires a completed `subscriber_only` download from that channel first. It scans at most 200 candidates, accepts only explicitly confirmed members-only items, deduplicates IDs and rechecks access before downloading. Posts, member playlists and streams may be missed.
+- Passwords use scrypt hashes. Login sessions are stored as hashes and invalidated by password/MFA changes. TOTP codes cannot be replayed; login throttling persists across restarts. Production cookies are Secure, HttpOnly and SameSite=Strict, with cross-site mutation checks.
+- Private media/API endpoints require authentication. Socket guards block local, private, metadata and non-web destinations; production adds a host-managed container egress firewall for native helpers.
+- Worker diagnostics are bounded and do not expose raw cookie values, request headers or signed media URLs. Arbitrary yt-dlp plugins and remote script components are disabled.
+- `.gitignore` and the Docker build allowlist exclude runtime state, cookies, secrets, private reports and media. They do not remove already tracked files: audit both files and history before publication. No production credentials belong in configuration examples.
+
+## Tests
+
+```sh
+.venv/bin/python -m pip install -r requirements-test.txt
+.venv/bin/python -m pytest -q
+```
+
+Tests cover owner access/MFA, durable jobs and library behavior, cancellation, format handling, network restrictions, scoped browser sessions and cleanup. Cookie values and credentials in tests are synthetic fixtures; the TOTP vector is published in RFC 6238. FFmpeg/FFprobe are required. The final public source is tested separately from the running personal app, without reading real Chrome sessions or downloading media.
+
+## Deployment status
+
+Source publication is separate from deployment. No GitHub Pages, Oracle host or public application is configured by this repository's publication.
+
+[Caddy HTTPS deployment guidance](deploy/README-HTTPS.md) documents the staged production path. Compose binds the API to host loopback, requires owner MFA and HTTPS, uses separate private volumes and runs a non-root, read-only container. Configure the owner interactively with `manage.py`; do not pass passwords or authenticator secrets as command-line arguments. The older [Tailscale deployment guide](deploy/README-VPS.md) is an alternative and should not be mixed with the Caddy path.
+
+Before Oracle deployment, verify capacity/cost eligibility, storage mounts and backups, SSH access, hostname/DNS, TLS, MFA and IPv4/IPv6 firewall rules. Test restoration, reboot persistence and access from another network with the Mac shut down. Public exposure needs a separate review and approval.
+
+## License
+
+No license has been selected yet. Publishing the source does not grant an open-source license; a licensing decision remains pending.
