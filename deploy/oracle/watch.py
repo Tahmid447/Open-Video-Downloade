@@ -63,19 +63,6 @@ def authenticate(*, negative_audience=False):
             raise GuardStop("AUDIENCE_REJECTION_NOT_VERIFIED")
         return None
     if response.status_code != 200:
-        diagnostic_url = os.environ.get("OCI_DIAGNOSTIC_WRITE_URL")
-        if diagnostic_url:
-            endpoint = urlsplit(diagnostic_url)
-            if endpoint.scheme != "https" or endpoint.hostname != "objectstorage.ap-tokyo-1.oraclecloud.com":
-                raise GuardStop("INVALID_DIAGNOSTIC_ENDPOINT")
-            claims = json.loads(base64.urlsafe_b64decode(jwt.split(".")[1] + "=="))
-            # Temporary write-only Oracle object; no JWT, private key or client secret.
-            diagnostic = {"http_status":response.status_code,
-                "error":response.json().get("error"),
-                "description":response.json().get("error_description"),
-                "claims":{key:claims.get(key) for key in ("iss","aud","sub","repository_id","repository_owner_id","ref","workflow_ref")}}
-            requests.put(diagnostic_url, data=json.dumps(diagnostic).encode(),
-                headers={"Content-Type":"application/json"},timeout=30,allow_redirects=False)
         # Deliberately do not output the response body, headers or request.
         error = response.json().get("error", "unclassified")
         if error not in {"invalid_client", "invalid_grant", "invalid_request", "unauthorized_client", "access_denied", "unsupported_grant_type"}:
@@ -88,14 +75,12 @@ def authenticate(*, negative_audience=False):
 def main():
     authenticate(negative_audience=True)
     signer = authenticate()
-    cfg = {"region": REGION, "tenancy": os.environ["OCI_TENANCY"]}
-    iam = oci.identity.IdentityClient(cfg, signer=signer,
-        retry_strategy=oci.retry.NoneRetryStrategy(), timeout=(15,45))
-    regions = iam.list_region_subscriptions(cfg["tenancy"]).data
-    if [r.region_name for r in regions if r.is_home_region] != [REGION]:
-        raise GuardStop("HOME_REGION_CHANGED")
-    print(json.dumps({"status": "CLOUD_IDENTITY_VERIFIED", "wrong_audience_denied": True,
-                      "home_region_verified": True, "resources_created": False}))
+    from provision import Watch
+    config = json.loads(os.environ["OCI_WATCH_CONFIG"])
+    result = Watch(config, signer).run()
+    print(json.dumps(result))
+    if result['status'] not in {"CAPACITY_UNAVAILABLE", "CAPACITY_AVAILABLE_VERIFIED", "APPROVED_INSTANCE_EXISTS"}:
+        sys.exit(1)
 
 
 if __name__ == "__main__":

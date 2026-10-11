@@ -69,3 +69,56 @@ def test_private_error_body_is_never_propagated(env):
     env[1].return_value.text='synthetic-sensitive-error-body'
     with pytest.raises(watch.GuardStop,match='^OCI_TOKEN_EXCHANGE_HTTP_403_UNCLASSIFIED$'):
         watch.authenticate()
+
+spec2=importlib.util.spec_from_file_location('oracle_provision',Path(__file__).parents[1]/'deploy/oracle/provision.py')
+provision=importlib.util.module_from_spec(spec2);spec2.loader.exec_module(provision)
+
+
+def resources():
+    vm=SimpleNamespace(id='synthetic-instance',compartment_id='synthetic-compartment',shape=provision.SHAPE,
+        shape_config=SimpleNamespace(ocpus=2,memory_in_gbs=12),freeform_tags={'ovd-deployment':'synthetic-deployment'},lifecycle_state='RUNNING')
+    boot=SimpleNamespace(id='synthetic-boot',compartment_id=vm.compartment_id,size_in_gbs=50,vpus_per_gb=10,lifecycle_state='AVAILABLE')
+    data=SimpleNamespace(id='synthetic-data',compartment_id=vm.compartment_id,size_in_gbs=150,vpus_per_gb=10,lifecycle_state='AVAILABLE',freeform_tags=vm.freeform_tags)
+    state={'deployment_id':'synthetic-deployment'}
+    return vm,boot,data,state
+
+
+def test_exact_allocation_passes():
+    vm,boot,data,state=resources()
+    provision.check_inventory([vm],[boot],[data],state,vm.compartment_id)
+
+
+@pytest.mark.parametrize('change',['duplicate','paid-shape','cpu','ram','disk','performance','unknown','disappeared','terminating'])
+def test_resource_drift_fails_closed(change):
+    vm,boot,data,state=resources();instances=[vm]
+    if change=='duplicate':instances.append(vm)
+    if change=='paid-shape':vm.shape='VM.Standard.E4.Flex'
+    if change=='cpu':vm.shape_config.ocpus=4
+    if change=='ram':vm.shape_config.memory_in_gbs=24
+    if change=='disk':data.size_in_gbs=151
+    if change=='performance':data.vpus_per_gb=20
+    if change=='unknown':vm.freeform_tags={'ovd-deployment':'other'}
+    if change=='disappeared':state['instance_id']='another-instance'
+    if change=='terminating':vm.lifecycle_state='TERMINATING'
+    with pytest.raises(provision.SafetyStop):
+        provision.check_inventory(instances,[boot],[data],state,vm.compartment_id)
+
+
+def test_missing_server_never_recreates_known_instance():
+    with pytest.raises(provision.SafetyStop,match='APPROVED_INSTANCE_DISAPPEARED'):
+        provision.check_inventory([],[],[],{'deployment_id':'synthetic','instance_id':'old-instance'},'synthetic')
+
+
+def test_receipt_conflict_prevents_work():
+    client=Mock();config={'namespace':'synthetic','bucket':'synthetic'}
+    client.get_object.return_value=SimpleNamespace(data=SimpleNamespace(content=b'{"version":1,"deployment_id":"synthetic","lease_until":0}'),headers={'etag':'old'})
+    client.put_object.side_effect=RuntimeError('synthetic compare-and-swap conflict')
+    receipt=provision.Receipt(client,config)
+    with pytest.raises(RuntimeError,match='compare-and-swap'):receipt.acquire()
+    assert client.put_object.call_args.kwargs['if_match']=='old'
+
+
+def test_changed_free_terms_prevent_launch(monkeypatch):
+    monkeypatch.setattr(provision.requests,'get',Mock(return_value=SimpleNamespace(status_code=200,text='Trial credits for larger resources')))
+    with pytest.raises(provision.SafetyStop,match='FREE_TERMS_CHANGED'):
+        provision.verify_published_free_allowance()

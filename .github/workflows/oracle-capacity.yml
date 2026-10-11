@@ -19,12 +19,13 @@ jobs:
         with:
           persist-credentials: false
       - name: Install Oracle SDK
-        run: python3 -m pip install --disable-pip-version-check -r deploy/oracle/requirements.txt
-      - name: Verify restricted cloud identity
+        run: python3 -m pip install --disable-pip-version-check -r deploy/oracle/requirements.txt pytest==9.1.1
+      - name: Test safety guards
+        run: python3 -m pytest tests/test_oracle_watch.py tests/test_deployment_storage.py -q
+      - name: Check approved free capacity
         env:
           OCI_DOMAIN_URL: ${{ secrets.OCI_DOMAIN_URL }}
           OCI_CLIENT_ID: ${{ secrets.OCI_CLIENT_ID }}
           OCI_CLIENT_SECRET: ${{ secrets.OCI_CLIENT_SECRET }}
-          OCI_DIAGNOSTIC_WRITE_URL: ${{ secrets.OCI_DIAGNOSTIC_WRITE_URL }}
-          OCI_TENANCY: ${{ secrets.OCI_TENANCY }}
+          OCI_WATCH_CONFIG: ${{ secrets.OCI_WATCH_CONFIG }}
         run: python3 deploy/oracle/watch.py
