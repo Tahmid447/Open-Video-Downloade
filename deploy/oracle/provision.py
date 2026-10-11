@@ -303,6 +303,7 @@ class Watch:
         boots=re.findall(r'OVD_PRIVATE_READY_BOOT=([a-f0-9-]{36})',output)
         self.compute.delete_console_history(h.id)
         if not boots:
+            require(time.time()-vm.time_created.timestamp()<10800, 'PRIVATE_INSTALLATION_NEEDS_REPAIR')
             return self.receipt.finish('PRIVATE_INSTALLATION_IN_PROGRESS')
         require(self.state.get('host_ed25519_fingerprint'),'HOST_FINGERPRINT_NOT_VERIFIED')
         if not self.state.get('reboot_requested'):
@@ -311,6 +312,7 @@ class Watch:
             self.compute.instance_action(vm.id,'SOFTRESET')
             return self.receipt.finish('PRIVATE_REBOOT_VERIFICATION_IN_PROGRESS')
         if boots[-1]==self.state['reboot_requested']['initial_boot']:
+            require(time.time()-self.state['reboot_requested']['time']<7200, 'REBOOT_VERIFICATION_NEEDS_REPAIR')
             return self.receipt.finish('PRIVATE_REBOOT_VERIFICATION_IN_PROGRESS')
         self.state['private_installation_verified']=True
         self.state['verified_boot']=boots[-1]

@@ -19,11 +19,16 @@ def render(source_sha, ssh_cidr):
 set -euo pipefail
 umask 077
 install -d -m 0700 /var/lib/ovd-bootstrap
+if ! command -v curl >/dev/null; then
+  export DEBIAN_FRONTEND=noninteractive
+  apt-get update
+  apt-get install -y curl ca-certificates
+fi
 cat > /etc/ovd-bootstrap.conf <<'OVD_CONFIG'
 OVD_SOURCE_SHA={shlex.quote(source_sha)}
 OVD_BOOTSTRAP_SSH_CIDR={shlex.quote(ssh_cidr)}
 OVD_CONFIG
-curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 'https://raw.githubusercontent.com/Tahmid447/Open-Video-Downloade/{source_sha}/deploy/oracle/bootstrap.sh' -o /var/lib/ovd-bootstrap/bootstrap.sh
+curl --retry 3 --retry-delay 5 --fail --silent --show-error --location --proto '=https' --tlsv1.2 'https://raw.githubusercontent.com/Tahmid447/Open-Video-Downloade/{source_sha}/deploy/oracle/bootstrap.sh' -o /var/lib/ovd-bootstrap/bootstrap.sh
 printf '{digest}  /var/lib/ovd-bootstrap/bootstrap.sh\\n' | sha256sum --check --status
 chmod 0700 /var/lib/ovd-bootstrap/bootstrap.sh
 cat > /var/lib/ovd-bootstrap/report-failure.sh <<'OVD_FAILURE'

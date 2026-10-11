@@ -36,5 +36,5 @@ jobs:
       - name: Run native tests without network or host data
         run: |
           docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges \
-            --tmpfs /tmp:rw,nosuid,nodev,size=512m --entrypoint python ovd-arm64-tests \
+            --tmpfs /tmp:rw,exec,nosuid,nodev,size=2g --entrypoint python ovd-arm64-tests \
             -m pytest -p no:cacheprovider /app/tests -q
