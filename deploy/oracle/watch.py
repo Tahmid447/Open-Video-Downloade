@@ -63,6 +63,19 @@ def authenticate(*, negative_audience=False):
             raise GuardStop("AUDIENCE_REJECTION_NOT_VERIFIED")
         return None
     if response.status_code != 200:
+        diagnostic_url = os.environ.get("OCI_DIAGNOSTIC_WRITE_URL")
+        if diagnostic_url:
+            endpoint = urlsplit(diagnostic_url)
+            if endpoint.scheme != "https" or endpoint.hostname != "objectstorage.ap-tokyo-1.oraclecloud.com":
+                raise GuardStop("INVALID_DIAGNOSTIC_ENDPOINT")
+            claims = json.loads(base64.urlsafe_b64decode(jwt.split(".")[1] + "=="))
+            # Temporary write-only Oracle object; no JWT, private key or client secret.
+            diagnostic = {"http_status":response.status_code,
+                "error":response.json().get("error"),
+                "description":response.json().get("error_description"),
+                "claims":{key:claims.get(key) for key in ("iss","aud","sub","repository_id","repository_owner_id","ref","workflow_ref")}}
+            requests.put(diagnostic_url, data=json.dumps(diagnostic).encode(),
+                headers={"Content-Type":"application/json"},timeout=30,allow_redirects=False)
         # Deliberately do not output the response body, headers or request.
         error = response.json().get("error", "unclassified")
         if error not in {"invalid_client", "invalid_grant", "invalid_request", "unauthorized_client", "access_denied", "unsupported_grant_type"}:

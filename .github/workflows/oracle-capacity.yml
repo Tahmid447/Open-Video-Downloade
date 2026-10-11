@@ -25,5 +25,6 @@ jobs:
           OCI_DOMAIN_URL: ${{ secrets.OCI_DOMAIN_URL }}
           OCI_CLIENT_ID: ${{ secrets.OCI_CLIENT_ID }}
           OCI_CLIENT_SECRET: ${{ secrets.OCI_CLIENT_SECRET }}
+          OCI_DIAGNOSTIC_WRITE_URL: ${{ secrets.OCI_DIAGNOSTIC_WRITE_URL }}
           OCI_TENANCY: ${{ secrets.OCI_TENANCY }}
         run: python3 deploy/oracle/watch.py
