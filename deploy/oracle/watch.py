@@ -34,7 +34,7 @@ def authenticate(*, negative_audience=False):
     parsed = urlsplit(domain)
     if (parsed.scheme != "https" or not parsed.hostname or
             not parsed.hostname.endswith(".identity.oraclecloud.com") or
-            parsed.path or parsed.query or parsed.fragment or parsed.username or parsed.port):
+            parsed.path or parsed.query or parsed.fragment or parsed.username or parsed.port not in (None, 443)):
         raise GuardStop("INVALID_IDENTITY_ENDPOINT")
     url = os.environ["ACTIONS_ID_TOKEN_REQUEST_URL"]
     if urlsplit(url).scheme != "https":
