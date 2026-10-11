@@ -32,10 +32,14 @@ compose=(docker compose --project-name open-video-downloader --env-file "$RELEAS
 # Build while the old container is still serving. A failed build leaves it intact.
 "${compose[@]}" build --pull
 install -d -m 0755 /etc/open-video-downloader /etc/systemd/system/docker.service.d
+install -m 0755 "$RELEASE/deploy/verify-data-mount.sh" /etc/open-video-downloader/verify-data-mount.sh
 install -m 0755 "$RELEASE/deploy/egress-firewall.sh" /etc/open-video-downloader/egress-firewall.sh
 /etc/open-video-downloader/egress-firewall.sh
 cat > /etc/systemd/system/docker.service.d/ovd-firewall.conf <<'EOF'
+[Unit]
+RequiresMountsFor=/srv/ovd-data
 [Service]
+ExecStartPre=/etc/open-video-downloader/verify-data-mount.sh
 ExecStartPre=/etc/open-video-downloader/egress-firewall.sh pre
 ExecStartPost=/etc/open-video-downloader/egress-firewall.sh
 EOF

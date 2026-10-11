@@ -6,9 +6,11 @@ Ordinary device browser → Caddy HTTPS on VPS → localhost-only FastAPI → pr
 
 ## Prepare privately
 
-Use the home-region Always Free A1 plan in the checklist. Attach the approved block volume, mount persistently at `/srv/ovd-data`, verify its filesystem UUID and record it in root-owned `/etc/open-video-downloader/data-volume.uuid` (0600). Verify the mount after reboot. `prepare-cloud-storage.sh` refuses a missing or mismatched mount; it never formats a disk or falls back to the boot disk. Compose binds the library to that host mount. Temporary media, SQLite and encrypted configuration use separate private Docker volumes on the boot disk.
+Use the home-region Always Free A1 plan in the checklist. Attach the approved block volume, mount persistently at `/srv/ovd-data`, verify its filesystem UUID and record it in root-owned `/etc/open-video-downloader/data-volume.uuid` (0600). Verify the mount after reboot. `prepare-cloud-storage.sh` refuses a missing or mismatched mount; it never formats a disk or falls back to the boot disk. Compose binds temporary downloads, the library, SQLite state and encrypted configuration to separate private directories on that data volume. The encryption key remains outside it. Existing Docker volumes with boot-disk storage cause deployment to stop for a reviewed migration; they are never discarded or silently replaced.
 
 Keep OCI 80/443/8000 closed, permit SSH only from your approved current source address. Review `deploy/.env.example`: 100 GiB library cap, one processing job, 1 GiB file limit, 3 GiB temporary budget per job, 6 GiB total temporary cap, 1 GiB minimum free space, 2 GiB container memory and 1.5 CPUs. Caps are admission controls, not reserved disk space; monitor the actual filesystems. The 150 GB data volume needs an independent destination for a full backup near the library cap.
+
+On this dedicated host Docker itself also requires the data mount and verifies its UUID before startup. This covers Docker's automatic container restart after reboot, which otherwise could run before the application's systemd mount check. A failed mount blocks startup rather than writing to an empty boot-disk directory.
 
 From the reviewed clean Git checkout run:
 

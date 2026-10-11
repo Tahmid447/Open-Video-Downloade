@@ -58,6 +58,11 @@ services:
     networks: [private]
 volumes:
   media:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /srv/ovd-data/downloads
   library:
     driver: local
     driver_opts:
@@ -65,7 +70,17 @@ volumes:
       o: bind
       device: /srv/ovd-data/library
   state:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /srv/ovd-data/state
   config:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /srv/ovd-data/config
 networks:
   private:
     enable_ipv6: false

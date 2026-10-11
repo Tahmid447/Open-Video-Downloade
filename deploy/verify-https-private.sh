@@ -3,6 +3,7 @@
 set -euo pipefail
 RELEASE="$(cd "$(dirname "$0")/.." && pwd -P)"
 "$RELEASE/deploy/prepare-cloud-storage.sh"
+python3 "$RELEASE/deploy/verify-storage-volumes.py" --require-present
 compose=(docker compose --project-name open-video-downloader --env-file "$RELEASE/deploy/.env" --env-file "$RELEASE/deploy/image.env" -f "$RELEASE/deploy/docker-compose.yml")
 id="$("${compose[@]}" ps -q downloader)"
 docker inspect "$id" | python3 -c '

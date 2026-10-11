@@ -12,7 +12,7 @@ trap 'rm -f "$ARCHIVE"' EXIT
 # No .venv, media, logs, LaunchAgent or local environment/secrets are transferred.
 files=(app.py common.py worker.py network_guard.py database.py extraction.py media.py security.py accounts.py manage.py vault.py recovery.py requirements.txt Dockerfile .dockerignore static templates
        deploy/docker-compose.yml deploy/.env.example deploy/healthcheck.sh deploy/service.sh deploy/Caddyfile.example deploy/enable-https.sh deploy/README-HTTPS.md
-       deploy/prepare-cloud-storage.sh deploy/install-https-base.sh deploy/apply-https-release.sh deploy/egress-firewall.sh deploy/verify-https-private.sh deploy/README-VPS.md deploy/ACCOUNT-CONNECTIONS.md deploy/ORACLE-CHECKLIST.md)
+       deploy/prepare-cloud-storage.sh deploy/verify-data-mount.sh deploy/verify-storage-volumes.py deploy/install-https-base.sh deploy/apply-https-release.sh deploy/egress-firewall.sh deploy/verify-https-private.sh deploy/README-VPS.md deploy/ACCOUNT-CONNECTIONS.md deploy/ORACLE-CHECKLIST.md)
 # Directory allowlisting alone could include ignored local files. Transfer reviewed,
 # committed files only; never recursively walk a runtime or asset directory.
 if ! git -C "$ROOT" diff --quiet || ! git -C "$ROOT" diff --cached --quiet; then

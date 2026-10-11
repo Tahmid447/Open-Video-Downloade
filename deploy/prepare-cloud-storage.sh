@@ -1,14 +1,16 @@
 #!/bin/bash
 # Dedicated Ubuntu ARM64 host only. Never formats disks or substitutes a missing mount.
 set -euo pipefail
-[ "$(uname -s)" = Linux ] && [ "$(uname -m)" = aarch64 ] && [ "$(id -u)" -eq 0 ] || { echo 'Requires sudo on the Ubuntu ARM64 server.' >&2; exit 2; }
-mountpoint -q /srv/ovd-data || { echo 'Mount the approved block volume at /srv/ovd-data first. No boot-disk fallback.' >&2; exit 2; }
-expected=/etc/open-video-downloader/data-volume.uuid
-[ -s "$expected" ] || { echo 'Record the approved block filesystem UUID before installation.' >&2; exit 2; }
-actual="$(findmnt -rn -o UUID -T /srv/ovd-data)"
-[ "$actual" = "$(cat "$expected")" ] && [ -n "$actual" ] || { echo 'Data-volume UUID mismatch. Refusing deployment.' >&2; exit 2; }
-install -d -m 0700 -o 10001 -g 10001 /srv/ovd-data/library
-install -d -m 0700 -o 10001 -g 10001 /srv/ovd-data/backups
+bash "$(dirname "$0")/verify-data-mount.sh"
+# Docker retains old volume options when Compose changes. Never silently use an
+# existing boot-disk volume or replace it with an empty state directory.
+if command -v docker >/dev/null; then
+  python3 "$(dirname "$0")/verify-storage-volumes.py"
+fi
+for directory in downloads library state config backups; do
+  [ ! -L "/srv/ovd-data/$directory" ] || { echo 'Symlinked data directory. Refusing deployment.' >&2; exit 2; }
+  install -d -m 0700 -o 10001 -g 10001 "/srv/ovd-data/$directory"
+done
 install -d -m 0700 -o 10001 -g 10001 /etc/open-video-downloader/keys/provider
 key=/etc/open-video-downloader/keys/provider/master.key
 if [ ! -e "$key" ]; then
