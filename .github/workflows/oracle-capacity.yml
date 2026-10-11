@@ -1,6 +1,8 @@
 name: Oracle Always Free capacity
 on:
   workflow_dispatch:
+  schedule:
+    - cron: '37 * * * *' # Hourly, away from the busiest top-of-hour interval.
 permissions:
   contents: read
   id-token: write
