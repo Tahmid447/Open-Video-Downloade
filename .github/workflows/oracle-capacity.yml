@@ -1,0 +1,29 @@
+name: Oracle Always Free capacity
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+  id-token: write
+concurrency:
+  group: oracle-always-free-provisioning
+  cancel-in-progress: false
+jobs:
+  capacity:
+    if: github.repository == 'Tahmid447/Open-Video-Downloade' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment: ovd-provisioning
+    steps:
+      - name: Checkout reviewed source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Install Oracle SDK
+        run: python3 -m pip install --disable-pip-version-check -r deploy/oracle/requirements.txt
+      - name: Verify restricted cloud identity
+        env:
+          OCI_DOMAIN_URL: ${{ secrets.OCI_DOMAIN_URL }}
+          OCI_CLIENT_ID: ${{ secrets.OCI_CLIENT_ID }}
+          OCI_CLIENT_SECRET: ${{ secrets.OCI_CLIENT_SECRET }}
+          OCI_TENANCY: ${{ secrets.OCI_TENANCY }}
+        run: python3 deploy/oracle/watch.py
