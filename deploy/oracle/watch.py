@@ -4,6 +4,7 @@ Oracle user sessions, private SSH keys and provider cookies are never inputs.
 GitHub OIDC and a restricted OAuth client produce a 20-minute proof-of-possession
 session. Neither JWT nor private key is persisted on the runner.
 """
+import base64
 import json
 import os
 import sys
@@ -46,9 +47,10 @@ def authenticate(*, negative_audience=False):
     if response.status_code != 200:
         raise GuardStop("GITHUB_OIDC_FAILED")
     jwt = response.json()["value"]
-    private = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-    public = private.public_key().public_bytes(serialization.Encoding.PEM,
-        serialization.PublicFormat.SubjectPublicKeyInfo).decode()
+    private = rsa.generate_private_key(public_exponent=65537, key_size=3072)
+    # Match Oracle's official SDK: base64 DER SubjectPublicKeyInfo, not PEM.
+    public = base64.b64encode(private.public_key().public_bytes(serialization.Encoding.DER,
+        serialization.PublicFormat.SubjectPublicKeyInfo)).decode()
     response = requests.post(domain + "/oauth2/v1/token",
         auth=(os.environ["OCI_CLIENT_ID"], os.environ["OCI_CLIENT_SECRET"]),
         data={"grant_type": "urn:ietf:params:oauth:grant-type:token-exchange",
