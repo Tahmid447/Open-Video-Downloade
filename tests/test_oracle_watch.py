@@ -122,3 +122,76 @@ def test_changed_free_terms_prevent_launch(monkeypatch):
     monkeypatch.setattr(provision.requests,'get',Mock(return_value=SimpleNamespace(status_code=200,text='Trial credits for larger resources')))
     with pytest.raises(provision.SafetyStop,match='FREE_TERMS_CHANGED'):
         provision.verify_published_free_allowance()
+
+spec3=importlib.util.spec_from_file_location('cloud_init',Path(__file__).parents[1]/'deploy/oracle/cloud_init.py')
+cloud_init=importlib.util.module_from_spec(spec3);spec3.loader.exec_module(cloud_init)
+
+
+@pytest.mark.parametrize('cidr',['0.0.0.0/0','10.0.0.1/32','8.8.8.0/24','::/0'])
+def test_bootstrap_rejects_broad_or_private_ssh(cidr):
+    with pytest.raises(ValueError):cloud_init.render('a'*40,cidr)
+
+
+def test_bootstrap_is_hash_pinned_and_shell_parses():
+    import subprocess
+    script=cloud_init.render('a'*40,'8.8.8.8/32')
+    subprocess.run(['bash','-n'],input=script,text=True,check=True)
+    assert 'sha256sum --check --status' in script
+    assert '/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/' in script
+    assert 'PRIVATE KEY' not in script
+
+
+def prepared_launcher(monkeypatch):
+    import sys
+    monkeypatch.setitem(sys.modules,'cloud_init',cloud_init)
+    job=provision.Watch.__new__(provision.Watch)
+    job.config={'compartment_id':'synthetic-compartment','image_id':'synthetic-image',
+        'ssh_public_key':'ssh-ed25519 synthetic-public-fixture','source_sha':'a'*40,
+        'owner_ssh_cidr':'8.8.8.8/32','subnet_id':'synthetic-subnet','armed':True}
+    job.state={'deployment_id':'synthetic-deployment'}
+    job.ad='synthetic-ad';job.receipt=Mock();job.verify_network=Mock();job.compute=Mock()
+    job.compute.get_image.return_value.data=SimpleNamespace(id='synthetic-image',compartment_id=None,
+        lifecycle_state='AVAILABLE',operating_system='Canonical Ubuntu',operating_system_version='24.04',display_name='Ubuntu-aarch64')
+    job.continue_installation=Mock(return_value={'status':'PRIVATE_INSTALLATION_IN_PROGRESS'})
+    job.inventory=Mock(return_value=([],[],[]))
+    return job
+
+
+def test_launch_request_is_fixed_and_durably_marked(monkeypatch):
+    job=prepared_launcher(monkeypatch)
+    def launch(details,**kwargs):
+        assert job.receipt.save.called and job.state.get('launch_pending')
+        assert details.shape=='VM.Standard.A1.Flex' and details.shape_config.ocpus==2
+        assert details.shape_config.memory_in_gbs==12
+        assert details.source_details.boot_volume_size_in_gbs==50
+        assert details.source_details.boot_volume_vpus_per_gb==10
+        assert details.create_vnic_details.assign_ipv6_ip is False
+        assert kwargs['opc_retry_token']==job.state['launch_pending']['retry_token']
+        return SimpleNamespace(data=SimpleNamespace(id='synthetic-instance'))
+    job.compute.launch_instance.side_effect=launch
+    job.launch(None)
+    assert job.state['instance_id']=='synthetic-instance' and 'launch_pending' not in job.state
+
+
+def test_ambiguous_launch_retains_receipt_and_never_retries(monkeypatch):
+    job=prepared_launcher(monkeypatch)
+    job.compute.launch_instance.side_effect=TimeoutError('synthetic network timeout')
+    with pytest.raises(TimeoutError):job.launch(None)
+    assert job.state['launch_pending']
+    assert job.compute.launch_instance.call_count==1
+    job.continue_installation.assert_not_called()
+
+
+def test_capacity_rejection_reconciles_before_clearing_receipt(monkeypatch):
+    job=prepared_launcher(monkeypatch)
+    job.compute.launch_instance.side_effect=watch.oci.exceptions.ServiceError(500,'InternalError',{},'Out of host capacity.')
+    job.launch(None)
+    job.inventory.assert_called_once()
+    assert 'launch_pending' not in job.state
+    job.receipt.finish.assert_called_with('CAPACITY_UNAVAILABLE')
+
+
+def test_unarmed_watch_cannot_launch(monkeypatch):
+    job=prepared_launcher(monkeypatch);job.config['armed']=False
+    with pytest.raises(provision.SafetyStop,match='WATCH_NOT_ARMED'):job.launch(None)
+    job.compute.launch_instance.assert_not_called()

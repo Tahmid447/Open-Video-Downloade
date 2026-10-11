@@ -37,11 +37,21 @@ major="$(docker version --format '{{.Server.Version}}' | cut -d. -f1)"
 [ "$major" -ge 28 ] || { echo 'Docker Engine 28+ is required for safe localhost publication.' >&2; exit 2; }
 docker compose version
 
-[ -n "${OVD_SSH_CONNECTION:-}" ] || { echo 'Missing verified SSH session; no firewall changes.' >&2; exit 2; }
-read -r _client _client_port _server ssh_port <<< "$OVD_SSH_CONNECTION"
-[[ "$ssh_port" =~ ^[0-9]+$ ]] || exit 2
-# Keep HTTP(S) closed until the separately reviewed exposure command.
-ufw allow "$ssh_port/tcp" comment 'Preserve current SSH access'
+if [ -n "${OVD_BOOTSTRAP_SSH_CIDR:-}" ]; then
+  # Headless initial installation: an explicit, owner-approved IPv4 /32 only.
+  python3 - "$OVD_BOOTSTRAP_SSH_CIDR" <<'PYCODE'
+import ipaddress,sys
+n=ipaddress.ip_network(sys.argv[1],strict=True)
+assert n.version==4 and n.prefixlen==32 and n.network_address.is_global
+PYCODE
+  ufw allow from "$OVD_BOOTSTRAP_SSH_CIDR" to any port 22 proto tcp comment 'Approved owner SSH only'
+else
+  [ -n "${OVD_SSH_CONNECTION:-}" ] || { echo 'Missing verified SSH session; no firewall changes.' >&2; exit 2; }
+  read -r _client _client_port _server ssh_port <<< "$OVD_SSH_CONNECTION"
+  [[ "$ssh_port" =~ ^[0-9]+$ ]] || exit 2
+  ufw allow "$ssh_port/tcp" comment 'Preserve current SSH access'
+fi
+# Keep HTTP(S) closed until owner enrollment and public-exposure checks pass.
 ufw insert 1 deny 8000/tcp comment 'Local application only'
 ufw insert 1 deny 80/tcp comment 'Pending exposure approval'
 ufw insert 1 deny 443/tcp comment 'Pending exposure approval'

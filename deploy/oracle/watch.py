@@ -79,7 +79,19 @@ def main():
     config = json.loads(os.environ["OCI_WATCH_CONFIG"])
     result = Watch(config, signer).run()
     print(json.dumps(result))
-    if result['status'] not in {"CAPACITY_UNAVAILABLE", "CAPACITY_AVAILABLE_VERIFIED", "APPROVED_INSTANCE_EXISTS"}:
+    ready = "PRIVATE_INSTALLATION_READY_OWNER_ENROLLMENT_REQUIRED"
+    normal = {"CAPACITY_UNAVAILABLE", "CAPACITY_AVAILABLE_VERIFIED", "APPROVED_INSTANCE_EXISTS",
+              "PRIVATE_INSTALLATION_IN_PROGRESS", "PRIVATE_REBOOT_VERIFICATION_IN_PROGRESS", ready}
+    if result['status'] == ready:
+        token = os.environ.get("GH_WORKFLOW_TOKEN")
+        if token:
+            response = requests.put(
+                "https://api.github.com/repos/" + REPOSITORY + "/actions/workflows/oracle-capacity.yml/disable",
+                headers={"Authorization":"Bearer "+token,"Accept":"application/vnd.github+json"},timeout=30)
+            if response.status_code != 204:
+                raise GuardStop("WATCH_DISABLE_FAILED")
+            print(json.dumps({"status":"HOURLY_WATCH_DISABLED_OWNER_ENROLLMENT_REQUIRED"}))
+    if result['status'] not in normal:
         sys.exit(1)
 
 

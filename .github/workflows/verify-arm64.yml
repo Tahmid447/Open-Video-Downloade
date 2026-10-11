@@ -1,0 +1,37 @@
+name: Verify cloud ARM64 preparation
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  arm64:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Confirm native architecture and shell syntax
+        run: |
+          test "$(uname -m)" = aarch64
+          bash -n deploy/oracle/bootstrap.sh deploy/install-https-base.sh
+      - name: Build existing ARM64 application
+        run: docker build --tag ovd-arm64-verify .
+      - name: Build isolated test layer
+        run: |
+          cat > /tmp/ovd-test.Dockerfile <<'EOF'
+          FROM ovd-arm64-verify
+          USER root
+          COPY requirements-test.txt /tmp/requirements-test.txt
+          COPY deploy/oracle/requirements.txt /tmp/oracle-requirements.txt
+          RUN pip install --no-cache-dir -r /tmp/requirements-test.txt -r /tmp/oracle-requirements.txt
+          COPY tests/ /app/tests/
+          COPY deploy/ /app/deploy/
+          USER 10001:10001
+          EOF
+          docker build -f /tmp/ovd-test.Dockerfile --tag ovd-arm64-tests .
+      - name: Run native tests without network or host data
+        run: |
+          docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges \
+            --tmpfs /tmp:rw,nosuid,nodev,size=512m --entrypoint python ovd-arm64-tests \
+            -m pytest -p no:cacheprovider /app/tests -q

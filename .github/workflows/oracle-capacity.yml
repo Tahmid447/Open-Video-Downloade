@@ -4,6 +4,7 @@ on:
 permissions:
   contents: read
   id-token: write
+  actions: write # Disable this watch after verified private installation.
 concurrency:
   group: oracle-always-free-provisioning
   cancel-in-progress: false
@@ -11,7 +12,7 @@ jobs:
   capacity:
     if: github.repository == 'Tahmid447/Open-Video-Downloade' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 15
     environment: ovd-provisioning
     steps:
       - name: Checkout reviewed source
@@ -27,5 +28,6 @@ jobs:
           OCI_DOMAIN_URL: ${{ secrets.OCI_DOMAIN_URL }}
           OCI_CLIENT_ID: ${{ secrets.OCI_CLIENT_ID }}
           OCI_CLIENT_SECRET: ${{ secrets.OCI_CLIENT_SECRET }}
+          GH_WORKFLOW_TOKEN: ${{ github.token }}
           OCI_WATCH_CONFIG: ${{ secrets.OCI_WATCH_CONFIG }}
         run: python3 deploy/oracle/watch.py
