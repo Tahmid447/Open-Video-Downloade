@@ -38,3 +38,34 @@ jobs:
           docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges \
             --tmpfs /tmp:rw,exec,nosuid,nodev,size=2g --entrypoint python ovd-arm64-tests \
             -m pytest -p no:cacheprovider /app/tests -q
+  trust-rejection:
+    if: github.event.repository.private == false
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    environment: ovd-provisioning
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - run: python3 -m pip install --disable-pip-version-check -r deploy/oracle/requirements.txt
+      - name: Oracle must reject a different workflow
+        env:
+          OCI_DOMAIN_URL: ${{ secrets.OCI_DOMAIN_URL }}
+          OCI_CLIENT_ID: ${{ secrets.OCI_CLIENT_ID }}
+          OCI_CLIENT_SECRET: ${{ secrets.OCI_CLIENT_SECRET }}
+        run: |
+          python3 - <<'PYCODE'
+          import sys
+          sys.path.insert(0,'deploy/oracle')
+          from watch import authenticate,GuardStop
+          try:
+              authenticate()
+          except GuardStop as error:
+              assert str(error)=='OCI_TOKEN_EXCHANGE_HTTP_401_UNAUTHORIZED_CLIENT'
+              print('Oracle rejected the non-authorized workflow identity.')
+          else:
+              raise SystemExit('Unexpected access: disable the watch and inspect trust constraints.')
+          PYCODE

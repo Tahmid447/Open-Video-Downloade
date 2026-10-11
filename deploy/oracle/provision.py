@@ -106,6 +106,9 @@ class Watch:
         self.limits = oci.limits.LimitsClient(c, **k)
         self.quotas = oci.limits.QuotasClient(c, **k)
         self.objects = oci.object_storage.ObjectStorageClient(c, **k)
+        bucket=self.objects.get_bucket(config['namespace'],config['bucket']).data
+        require(bucket.public_access_type=='NoPublicAccess' and bucket.storage_tier=='Standard' and
+            bucket.versioning=='Disabled', 'STATE_BUCKET_SECURITY_CHANGED')
         self.receipt = Receipt(self.objects, config)
         self.state = self.receipt.state
 
