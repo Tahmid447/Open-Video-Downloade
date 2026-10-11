@@ -147,7 +147,8 @@ def prepared_launcher(monkeypatch):
     job=provision.Watch.__new__(provision.Watch)
     job.config={'compartment_id':'synthetic-compartment','image_id':'synthetic-image',
         'ssh_public_key':'ssh-ed25519 synthetic-public-fixture','source_sha':'a'*40,
-        'owner_ssh_cidr':'8.8.8.8/32','subnet_id':'synthetic-subnet','armed':True}
+        'owner_ssh_cidr':'8.8.8.8/32','subnet_id':'synthetic-subnet','armed':True,
+        'bootstrap_sha256':provision.hashlib.sha256(Path(provision.__file__).with_name('bootstrap.sh').read_bytes()).hexdigest()}
     job.state={'deployment_id':'synthetic-deployment'}
     job.ad='synthetic-ad';job.receipt=Mock();job.verify_network=Mock();job.compute=Mock()
     job.compute.get_image.return_value.data=SimpleNamespace(id='synthetic-image',compartment_id=None,

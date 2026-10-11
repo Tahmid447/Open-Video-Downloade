@@ -6,6 +6,7 @@ blind retries, resource deletion, provider sessions, or media uploads are allowe
 import base64
 import datetime as dt
 import html
+import hashlib
 import json
 import re
 import time
@@ -173,8 +174,12 @@ class Watch:
             subnet.route_table_id == self.config['route_table_id'] and
             not subnet.ipv6_cidr_block, 'SUBNET_CHANGED')
         rules = self.network.get_security_list(self.config['security_list_id']).data
-        require(len(rules.ingress_security_rules) == 1, 'INGRESS_CHANGED')
-        rule = rules.ingress_security_rules[0]
+        require(len(rules.ingress_security_rules) == 2, 'INGRESS_CHANGED')
+        ssh=[r for r in rules.ingress_security_rules if r.protocol=='6']
+        icmp=[r for r in rules.ingress_security_rules if r.protocol=='1']
+        require(len(ssh)==1 and len(icmp)==1 and icmp[0].source=='0.0.0.0/0' and
+            icmp[0].icmp_options.type==3 and icmp[0].icmp_options.code==4, 'INGRESS_CHANGED')
+        rule = ssh[0]
         require(rule.source == self.config['owner_ssh_cidr'] and rule.protocol == '6' and
             not rule.is_stateless and rule.tcp_options and
             rule.tcp_options.destination_port_range.min == 22 and
@@ -193,6 +198,7 @@ class Watch:
             'aarch64' in image.display_name, 'PLATFORM_IMAGE_CHANGED')
         require(self.config['ssh_public_key'].startswith('ssh-ed25519 ') and
             len(self.config['ssh_public_key'].splitlines()) == 1, 'INVALID_OWNER_PUBLIC_KEY')
+        require(hashlib.sha256(Path(__file__).with_name('bootstrap.sh').read_bytes()).hexdigest()==self.config['bootstrap_sha256'], 'BOOTSTRAP_REVISION_CHANGED')
         source = render(self.config['source_sha'], self.config['owner_ssh_cidr'])
         token = str(uuid.uuid4())
         self.state['launch_pending'] = {'retry_token':token, 'time':time.time()}
@@ -314,6 +320,7 @@ class Watch:
         self.receipt.acquire()
         try:
             instances, boots, volumes = self.inventory()
+            self.verify_network()
             if self.state.get('private_installation_verified'):
                 return self.receipt.finish('PRIVATE_INSTALLATION_READY_OWNER_ENROLLMENT_REQUIRED')
             if instances:

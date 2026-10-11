@@ -10,7 +10,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   capacity:
-    if: github.repository == 'Tahmid447/Open-Video-Downloade' && github.ref == 'refs/heads/main'
+    if: github.repository == 'Tahmid447/Open-Video-Downloade' && github.ref == 'refs/heads/main' && github.event.repository.private == false
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     environment: ovd-provisioning

@@ -5,6 +5,7 @@ permissions:
   contents: read
 jobs:
   arm64:
+    if: github.event.repository.private == false
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 25
     steps:
@@ -29,7 +30,9 @@ jobs:
           COPY deploy/ /app/deploy/
           USER 10001:10001
           EOF
-          docker build -f /tmp/ovd-test.Dockerfile --tag ovd-arm64-tests .
+          mkdir -p /tmp/ovd-test-context
+          cp -R tests deploy requirements-test.txt /tmp/ovd-test-context/
+          docker build -f /tmp/ovd-test.Dockerfile --tag ovd-arm64-tests /tmp/ovd-test-context
       - name: Run native tests without network or host data
         run: |
           docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges \
