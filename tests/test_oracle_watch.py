@@ -67,5 +67,5 @@ def test_negative_audience_rejection_is_verified(env):
 def test_private_error_body_is_never_propagated(env):
     env[1].return_value.status_code=403
     env[1].return_value.text='synthetic-sensitive-error-body'
-    with pytest.raises(watch.GuardStop,match='^OCI_TOKEN_EXCHANGE_HTTP_403$'):
+    with pytest.raises(watch.GuardStop,match='^OCI_TOKEN_EXCHANGE_HTTP_403_UNCLASSIFIED$'):
         watch.authenticate()

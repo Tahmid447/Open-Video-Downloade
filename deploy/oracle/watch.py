@@ -64,7 +64,10 @@ def authenticate(*, negative_audience=False):
         return None
     if response.status_code != 200:
         # Deliberately do not output the response body, headers or request.
-        raise GuardStop("OCI_TOKEN_EXCHANGE_HTTP_" + str(response.status_code))
+        error = response.json().get("error", "unclassified")
+        if error not in {"invalid_client", "invalid_grant", "invalid_request", "unauthorized_client", "access_denied", "unsupported_grant_type"}:
+            error = "unclassified"
+        raise GuardStop("OCI_TOKEN_EXCHANGE_HTTP_" + str(response.status_code) + "_" + error.upper())
     token = response.json()["token"]
     return oci.auth.signers.SecurityTokenSigner(token, private)
 
